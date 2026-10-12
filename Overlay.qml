@@ -102,7 +102,7 @@ Item {
     if (root.mode === "ask" && !text) return
     if (runProc.running) return
 
-    var args = root.mode === "find" ? ["find", "--limit", "10"].concat(text ? [text] : [])
+    var args = root.mode === "find" ? ["find", "--markdown", "--limit", "10"].concat(text ? [text] : [])
              : root.mode === "ask" ? ["ask", text]
              : ["brief"]
     root.busy = true
@@ -137,9 +137,14 @@ Item {
     }
     onExited: function(exitCode) {
       root.busy = false
-      root.result = String(runOut.text || "").trim()
-      if (exitCode !== 0) root.error = String(runErr.text || "").trim() || "The engine did not answer."
-      else if (!root.result) root.result = "Nothing found."
+      var out = String(runOut.text || "").trim()
+      var note = String(runErr.text || "").trim()
+      if (exitCode !== 0) {
+        root.error = note || "The engine did not answer."
+        return
+      }
+      // A note on a success (ask falling back to find) says why, above the answer.
+      root.result = (note ? "_" + note + "_\n\n" : "") + (out || "Nothing found.")
     }
   }
 
@@ -271,7 +276,7 @@ Item {
             id: resultText
             width: results.width
             wrapMode: Text.Wrap
-            textFormat: root.error || root.busy ? Text.PlainText : Text.MarkdownText
+            textFormat: root.error || root.busy || root.mode === "brief" ? Text.PlainText : Text.MarkdownText
             text: root.busy ? (root.mode === "ask" ? "Thinking…" : "Looking…")
                 : root.error ? root.error
                 : root.result

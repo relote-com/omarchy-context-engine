@@ -195,11 +195,12 @@ cmd_brief() {
 }
 
 cmd_find() {
-  local json=false limit=8 engine="" types=()
+  local json=false markdown=false limit=8 engine="" types=()
   local words=()
   while (($#)); do
     case "$1" in
     --json) json=true; shift ;;
+    --markdown) markdown=true; shift ;;
     --limit|-n) limit=${2:?}; shift 2 ;;
     --engine|-e) engine=${2:?}; shift 2 ;;
     --type|-t) types+=("${2:?}"); shift 2 ;;
@@ -216,7 +217,18 @@ cmd_find() {
     "${types[@]}")
   local result
   result=$(tool find "$body")
-  $json && jq '.data' <<<"$result" || jq -r '.text' <<<"$result"
+  if $json; then
+    jq '.data' <<<"$result"
+  elif $markdown; then
+    # For the overlay: a linked title, where it lives, and the start of the body.
+    jq -r '.data.hits // [] | if length == 0 then "Nothing found." else .[] |
+      "**[\(.title)](\(.url // ""))**  \n" +
+      "_\(.type) · \(.engine.name // .engine.slug // "") · \((.updated_at // "")[0:10])_  \n" +
+      ((.body // "") | gsub("\\s+"; " ") | .[0:220]) + "\n"
+      end' <<<"$result"
+  else
+    jq -r '.text' <<<"$result"
+  fi
 }
 
 cmd_get() {
@@ -246,6 +258,11 @@ cmd_remember() {
     esac
   done
 
+  # ce remember "Title" "body…": several arguments are a title and a body.
+  if [[ -z $title && ${#words[@]} -gt 1 ]]; then
+    title=${words[0]}
+    words=("${words[@]:1}")
+  fi
   local text="${words[*]:-}"
   if [[ -z $text && ! -t 0 ]]; then
     text=$(cat)
@@ -322,7 +339,10 @@ cmd_ask() {
       return
     fi
   fi
-  echo "(The engine's agent did not answer this key; showing what it remembers instead.)" >&2
+  local why
+  why=$(jq -r '.error.message // empty' <<<"${response:-}" 2>/dev/null || true)
+  [[ -n $why ]] || why="The engine's agent did not answer this key."
+  echo "($why Showing what it remembers instead.)" >&2
   cmd_find "$question"
 }
 
