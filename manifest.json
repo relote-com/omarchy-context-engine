@@ -1,0 +1,27 @@
+{
+  "schemaVersion": 1,
+  "id": "relote.context-engine",
+  "name": "Context Engine",
+  "version": "0.1.0",
+  "author": "Relote",
+  "license": "MIT",
+  "homepage": "https://contextengine.com",
+  "description": "One memory for every agent on Omarchy: find, remember and ask your Context Engine from the bar or a hotkey, and give every coding agent the same engine over MCP.",
+  "kinds": ["overlay", "bar-widget"],
+  "keepLoaded": true,
+  "entryPoints": {
+    "overlay": "Overlay.qml",
+    "barWidget": "BarWidget.qml"
+  },
+  "barWidget": {
+    "displayName": "Context Engine",
+    "description": "Your engine at a glance: click to find, right-click to remember, middle-click for what changed.",
+    "category": "AI",
+    "aliases": ["memory", "brain", "context-engine"],
+    "allowMultiple": false,
+    "defaultSection": "right",
+    "defaults": {
+      "refreshIntervalSec": 600
+    }
+  }
+}

@@ -1,0 +1,401 @@
+#!/bin/bash
+
+# ce — Context Engine from the Omarchy desktop.
+#
+# One key, kept in ~/.config/context-engine/config, reaches your engines over
+# the engine's plain HTTP door (POST /tool/<name>). The same key is handed to
+# every installed coding agent as an MCP server, so whichever agent Omarchy
+# launches shares one memory.
+
+set -euo pipefail
+
+CE_DIR=$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)
+CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/context-engine"
+CONFIG_FILE="$CONFIG_DIR/config"
+SERVER_NAME="context-engine"
+VERSION=$(jq -r '.version' "$CE_DIR/manifest.json" 2>/dev/null || echo dev)
+
+CE_HOST="${CE_HOST:-}"
+CE_KEY="${CE_KEY:-}"
+CE_ENGINE="${CE_ENGINE:-}"
+
+die() {
+  echo "ce: $*" >&2
+  exit 1
+}
+
+interactive() {
+  [[ -t 0 && -t 1 ]]
+}
+
+# The config is KEY=value lines, read rather than sourced so a stray line can
+# never run. The environment wins, so CE_KEY=… ce find … works for one call.
+load_config() {
+  local key value
+  if [[ -f $CONFIG_FILE ]]; then
+    while IFS='=' read -r key value; do
+      case "$key" in
+      CE_HOST) [[ -n $CE_HOST ]] || CE_HOST=$value ;;
+      CE_KEY) [[ -n $CE_KEY ]] || CE_KEY=$value ;;
+      CE_ENGINE) [[ -n $CE_ENGINE ]] || CE_ENGINE=$value ;;
+      esac
+    done <"$CONFIG_FILE"
+  fi
+  CE_HOST=${CE_HOST:-https://app.contextengine.com}
+  CE_HOST=${CE_HOST%/}
+}
+
+save_config() {
+  mkdir -p "$CONFIG_DIR"
+  chmod 700 "$CONFIG_DIR"
+  (
+    umask 077
+    printf 'CE_HOST=%s\nCE_KEY=%s\nCE_ENGINE=%s\n' "$CE_HOST" "$CE_KEY" "$CE_ENGINE" >"$CONFIG_FILE"
+  )
+}
+
+require_key() {
+  [[ -n $CE_KEY ]] || die "not signed in. Run: ce login"
+}
+
+# POST /tool/<name> with a JSON body. Prints the envelope {text, data, isError}
+# on success; on a refusal prints its text to stderr and fails.
+tool() {
+  local name=$1 body=${2:-'{}'} response status
+  require_key
+  response=$(curl -sS --max-time 60 -X POST "$CE_HOST/tool/$name" \
+    -H "authorization: Bearer $CE_KEY" \
+    -H "content-type: application/json" \
+    -H "user-agent: omarchy-context-engine/$VERSION" \
+    --data-binary "$body" -w $'\n%{http_code}') || die "could not reach $CE_HOST"
+  status=${response##*$'\n'}
+  response=${response%$'\n'*}
+
+  if [[ $status == 401 ]]; then
+    die "the key was refused (401). Make a new one and run: ce login"
+  elif ((status >= 400)); then
+    jq -r '.text // .error_description // .error // .' <<<"$response" >&2 2>/dev/null || echo "$response" >&2
+    return 1
+  fi
+  echo "$response"
+}
+
+# The engine a write lands in: --engine, then the configured default.
+engine_for_write() {
+  local engine=${1:-$CE_ENGINE}
+  [[ -n $engine ]] || die "no engine to save to. Pick one with: ce engine <slug>"
+  echo "$engine"
+}
+
+cmd_login() {
+  local key="" engine="" host=""
+  while (($#)); do
+    case "$1" in
+    --key) key=${2:?--key needs a value}; shift 2 ;;
+    --engine) engine=${2:?--engine needs a value}; shift 2 ;;
+    --host) host=${2:?--host needs a value}; shift 2 ;;
+    *) die "unexpected argument: $1" ;;
+    esac
+  done
+
+  [[ -n $host ]] && CE_HOST=${host%/}
+
+  if [[ -z $key ]]; then
+    interactive || die "pass the key with --key, or run ce login in a terminal"
+    cat <<EOF
+
+Context Engine needs a key for this computer.
+
+  1. Open $CE_HOST and sign in (an account is free).
+  2. AI tools → Connect an AI tool → Your own code → Create my key.
+     Give it "Can read and save" on the engines Omarchy should use.
+  3. Paste the key (it starts with ce_) below.
+
+EOF
+    if command -v xdg-open >/dev/null && gum confirm "Open $CE_HOST in your browser?"; then
+      xdg-open "$CE_HOST/agents" >/dev/null 2>&1 &
+    fi
+    key=$(gum input --password --placeholder "ce_…" --prompt "Key: ") || die "cancelled"
+  fi
+  key=$(tr -d '[:space:]' <<<"$key")
+  [[ -n $key ]] || die "no key given"
+
+  CE_KEY=$key
+  local brief
+  brief=$(tool brief) || die "that key did not work against $CE_HOST"
+
+  local engines writable
+  engines=$(jq -c '[.data.engines[]? | {slug, name, access}]' <<<"$brief")
+  writable=$(jq -r '.[] | select((.access // "") | test("write|save"; "i")) | .slug' <<<"$engines")
+
+  if [[ -z $engine ]]; then
+    if [[ $(wc -l <<<"$writable") -eq 1 && -n $writable ]]; then
+      engine=$writable
+    elif [[ -n $writable ]] && interactive; then
+      engine=$(gum choose --header "Which engine should Omarchy save to by default?" $writable) || die "cancelled"
+    else
+      engine=$(jq -r '.[0].slug // empty' <<<"$engines")
+    fi
+  fi
+
+  CE_ENGINE=$engine
+  save_config
+  echo "Signed in. Engines this key reaches:"
+  jq -r '.[] | "  \(.slug)\t\(.name)\t(\(.access // "?"))"' <<<"$engines"
+  [[ -n $CE_ENGINE ]] && echo "Saving to: $CE_ENGINE"
+}
+
+cmd_logout() {
+  rm -f "$CONFIG_FILE"
+  echo "Signed out. Agents keep their own copy until: ce disconnect"
+}
+
+cmd_status() {
+  local short=false
+  [[ ${1:-} == --short ]] && short=true
+  if [[ -z $CE_KEY ]]; then
+    $short && echo "not-signed-in" || echo "Not signed in. Run: ce login"
+    return 3
+  fi
+  local brief
+  if ! brief=$(tool brief 2>/dev/null); then
+    $short && echo "unreachable" || echo "Signed in, but $CE_HOST did not answer the key."
+    return 2
+  fi
+  if $short; then
+    echo "ok ${CE_ENGINE:-}"
+  else
+    echo "Host:    $CE_HOST"
+    echo "Default: ${CE_ENGINE:-<none>}"
+    echo "Engines:"
+    jq -r '.data.engines[]? | "  \(.slug)\t\(.name)\t(\(.access // "?"))"' <<<"$brief"
+    local changed
+    changed=$(jq -r '(.data.changed // []) | length' <<<"$brief")
+    echo "Changed since last visit: $changed"
+  fi
+}
+
+cmd_engine() {
+  if (($# == 0)); then
+    echo "${CE_ENGINE:-}"
+    return
+  fi
+  require_key
+  CE_ENGINE=$1
+  save_config
+  echo "Saving to: $CE_ENGINE"
+}
+
+cmd_brief() {
+  local json=false
+  [[ ${1:-} == --json ]] && json=true
+  local brief
+  brief=$(tool brief)
+  $json && jq '.data' <<<"$brief" || jq -r '.text' <<<"$brief"
+}
+
+cmd_find() {
+  local json=false limit=8 engine="" types=()
+  local words=()
+  while (($#)); do
+    case "$1" in
+    --json) json=true; shift ;;
+    --limit|-n) limit=${2:?}; shift 2 ;;
+    --engine|-e) engine=${2:?}; shift 2 ;;
+    --type|-t) types+=("${2:?}"); shift 2 ;;
+    *) words+=("$1"); shift ;;
+    esac
+  done
+  local q="${words[*]:-}"
+  local body
+  body=$(jq -nc --arg q "$q" --arg engine "$engine" --argjson limit "$limit" \
+    --args '{limit: $limit}
+      + (if $q != "" then {q: $q} else {} end)
+      + (if $engine != "" then {engine: $engine} else {} end)
+      + (if ($ARGS.positional | length) > 0 then {type: $ARGS.positional} else {} end)' \
+    "${types[@]}")
+  local result
+  result=$(tool find "$body")
+  $json && jq '.data' <<<"$result" || jq -r '.text' <<<"$result"
+}
+
+cmd_get() {
+  local ref=${1:?usage: ce get <type::slug> [--engine slug]} engine=""
+  shift
+  [[ ${1:-} == --engine || ${1:-} == -e ]] && engine=${2:?}
+  engine=$(engine_for_write "$engine")
+  tool get "$(jq -nc --arg ref "$ref" --arg engine "$engine" '{ref: $ref, engine: $engine}')" | jq -r '.text'
+}
+
+# ce remember [--type note|decision|task] [--title T] [--why R] [--tag t]… [text…]
+# Text may come on stdin. With no title, the first line is the title.
+cmd_remember() {
+  local type=note title="" why="" engine="" quiet=false notify=false tags=() words=()
+  while (($#)); do
+    case "$1" in
+    --type|-t) type=${2:?}; shift 2 ;;
+    --decision) type=decision; shift ;;
+    --task) type=task; shift ;;
+    --title) title=${2:?}; shift 2 ;;
+    --why) why=${2:?}; shift 2 ;;
+    --tag) tags+=("${2:?}"); shift 2 ;;
+    --engine|-e) engine=${2:?}; shift 2 ;;
+    --quiet|-q) quiet=true; shift ;;
+    --notify) notify=true; shift ;;
+    *) words+=("$1"); shift ;;
+    esac
+  done
+
+  local text="${words[*]:-}"
+  if [[ -z $text && ! -t 0 ]]; then
+    text=$(cat)
+  fi
+  [[ -n ${text//[[:space:]]/} ]] || die "nothing to remember"
+
+  local body=$text
+  if [[ -z $title ]]; then
+    title=$(head -n1 <<<"$text" | sed -E 's/^[#[:space:]]+//' | cut -c1-80)
+    [[ $(wc -l <<<"$text") -gt 1 ]] && body=$(tail -n +2 <<<"$text" | sed -e '/./,$!d')
+  fi
+  [[ -n $body ]] || body=$title
+  if [[ $type == decision && -z $why ]]; then
+    why=$body
+  fi
+
+  engine=$(engine_for_write "$engine")
+  local idem
+  idem=$(printf '%s\n%s\n%s' "$type" "$title" "$body" | sha256sum | cut -c1-32)
+
+  local result
+  payload() {
+    jq -nc --arg engine "$engine" --arg type "$type" --arg title "$1" --arg body "$body" \
+      --arg why "$why" --arg idem "$idem" \
+      --args '{engine: $engine, type: $type, title: $title, body: $body, idem: $idem,
+        tags: (["omarchy"] + $ARGS.positional)}
+        + (if $why != "" then {fields: {rationale: $why}} else {} end)' \
+      "${tags[@]}"
+  }
+
+  # A title is the record's id, so a second note with the same first line is
+  # refused rather than merged. Date it and try once more.
+  # tool is silent on stderr when it succeeds, so 2>&1 only ever adds a refusal.
+  local err
+  if ! result=$(tool write "$(payload "$title")" 2>&1); then
+    err=$result
+    if grep -qi "title\|taken\|already" <<<"$err"; then
+      if ! result=$(tool write "$(payload "$title ($(date '+%Y-%m-%d %H:%M'))")" 2>&1); then
+        echo "$result" >&2
+        $notify && notify-send -a "Context Engine" "Not saved" "${result:0:200}"
+        exit 1
+      fi
+    else
+      echo "$err" >&2
+      $notify && notify-send -a "Context Engine" "Not saved" "${err:0:200}"
+      exit 1
+    fi
+  fi
+
+  local ref
+  ref=$(jq -r '.data.ref // .data.record.ref // empty' <<<"$result")
+  $quiet || echo "Saved ${ref:-memory} to $engine"
+  $notify && notify-send -a "Context Engine" "Remembered" "$title"
+  return 0
+}
+
+# The engine's own agent, through its OpenAI-compatible door. It runs a full
+# agent turn (metered), and answers with what it found. Falls back to find.
+cmd_ask() {
+  local question="$*"
+  [[ -n $question ]] || die "usage: ce ask <question>"
+  require_key
+  local model response answer
+  model=$(curl -sS --max-time 20 "$CE_HOST/v1/models" -H "authorization: Bearer $CE_KEY" |
+    jq -r '.data[0].id // empty' 2>/dev/null || true)
+  if [[ -n $model ]]; then
+    response=$(curl -sS --max-time 180 -X POST "$CE_HOST/v1/chat/completions" \
+      -H "authorization: Bearer $CE_KEY" -H "content-type: application/json" \
+      --data-binary "$(jq -nc --arg m "$model" --arg q "$question" \
+        '{model: $m, stream: false, messages: [{role: "user", content: $q}]}')" || true)
+    answer=$(jq -r '.choices[0].message.content // empty' <<<"$response" 2>/dev/null || true)
+    if [[ -n $answer ]]; then
+      echo "$answer"
+      return
+    fi
+  fi
+  echo "(The engine's agent did not answer this key; showing what it remembers instead.)" >&2
+  cmd_find "$question"
+}
+
+cmd_tool() {
+  local name=${1:?usage: ce tool <name> [json]}
+  tool "$name" "${2:-{\}}" | jq .
+}
+
+cmd_mcp_url() {
+  echo "$CE_HOST/mcp"
+}
+
+usage() {
+  cat <<EOF
+ce $VERSION — Context Engine on Omarchy
+
+Usage: ce <command> [args]
+
+  setup                 Sign in, connect agents, install the skill and menu
+  login [--key K]       Store a key for this computer
+  logout                Forget the key
+  status [--short]      Is this computer connected, and to what
+  engine [slug]         Show or set the engine new memories go to
+
+  brief [--json]        What changed since you last looked
+  find [query]          Search memory (no query: most recent)
+  get <type::slug>      Open one memory
+  remember [text]       Save a note (stdin works; --decision --why, --task, --tag)
+  ask <question>        Ask the engine's own agent (metered)
+
+  connect [agent…]      Give coding agents the engine over MCP
+  disconnect [agent…]   Remove it again
+  agents                Which agents are installed and connected
+  open                  Open the engine console in the browser
+  tool <name> [json]    Call any engine tool raw
+
+Agents: claude codex opencode hermes cursor gemini
+EOF
+}
+
+main() {
+  load_config
+  local command=${1:-help}
+  (($#)) && shift
+  case "$command" in
+  login) cmd_login "$@" ;;
+  logout) cmd_logout ;;
+  status) cmd_status "$@" ;;
+  engine) cmd_engine "$@" ;;
+  brief) cmd_brief "$@" ;;
+  find | search) cmd_find "$@" ;;
+  get) cmd_get "$@" ;;
+  remember | save | note) cmd_remember "$@" ;;
+  ask) cmd_ask "$@" ;;
+  tool) cmd_tool "$@" ;;
+  mcp-url) cmd_mcp_url ;;
+  open) xdg-open "$CE_HOST" >/dev/null 2>&1 & ;;
+  connect | disconnect | agents)
+    source "$CE_DIR/lib/agents.sh"
+    "agents_$command" "$@"
+    ;;
+  setup | uninstall)
+    source "$CE_DIR/lib/agents.sh"
+    source "$CE_DIR/lib/setup.sh"
+    "setup_$command" "$@"
+    ;;
+  version | --version) echo "$VERSION" ;;
+  help | -h | --help) usage ;;
+  *)
+    usage >&2
+    exit 1
+    ;;
+  esac
+}
+
+main "$@"
