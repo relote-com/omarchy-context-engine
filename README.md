@@ -45,6 +45,7 @@ Not set up yet? Click the dimmed brain icon in the bar and it opens setup.
 | --- | --- |
 | Bar icon | Click to find, right-click to remember, middle-click for what changed |
 | `Super+Ctrl+M` | Find in memory (Tab switches to Remember, Ask, What changed) |
+| Ask (in the box or the menu) | Opens your default Omarchy agent with the question. The agent answers from the engine over MCP |
 | `Super+Alt+M` | Remember something. The first line is the title |
 | Omarchy menu › Context Engine | Find, remember, what changed, connect agents, setup |
 | Any agent | Just ask: "what did we decide about the gaps?" The skill has it check the engine first |
@@ -56,7 +57,6 @@ ce brief                                   # what changed since you last looked
 ce find "hyprland gaps"                    # search across your engines
 ce remember "Gaps are 5 on the Air" --decision --why "10 wasted space on a 13in screen"
 git log -1 --format=%B | ce remember --tag release
-ce ask "what's still open on the Acme install?"   # the engine's own agent (metered)
 ce engine acme                             # save to another engine by default
 ce agents                                  # which agents are connected
 ```
@@ -87,10 +87,14 @@ key with *Can read* and run `ce login` again.
 
 ## How it works
 
-- **`bin/ce`** is a small bash client for the engine's plain HTTP door,
-  `POST /tool/<name>` (`brief`, `find`, `get`, `write`, `edit`), plus the
-  OpenAI-compatible `/v1/chat/completions` for `ce ask`. It needs only
-  `curl`, `jq` and `gum`, which Omarchy already ships.
+- **Questions go to your agent, not to `ce`.** Ask hands the question to
+  `omarchy agent prompt`, so the answer comes from whichever agent you chose
+  in Omarchy, reading the engine through its MCP server. If that agent has no
+  engine yet (say you changed the default after setup), Ask connects it first.
+- **`bin/ce`** is a small bash client for the desktop's quick paths, over the
+  engine's plain HTTP door `POST /tool/<name>` (`brief`, `find`, `get`,
+  `write`, `edit`). It needs only `curl`, `jq` and `gum`, which Omarchy
+  already ships.
 - **`Overlay.qml`** and **`BarWidget.qml`** are an Omarchy shell plugin
   (`overlay` + `bar-widget`). They hold no key and make no HTTP calls
   themselves. They run `bin/ce`.

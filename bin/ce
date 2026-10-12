@@ -319,31 +319,17 @@ cmd_remember() {
   return 0
 }
 
-# The engine's own agent, through its OpenAI-compatible door. It runs a full
-# agent turn (metered), and answers with what it found. Falls back to find.
-cmd_ask() {
-  local question="$*"
-  [[ -n $question ]] || die "usage: ce ask <question>"
+# Questions go to Omarchy's default agent, which reads the engine over MCP.
+# Before handing one over, make sure that agent is actually connected: the
+# default can change after setup, and a new agent starts without the server.
+cmd_ensure_agent() {
   require_key
-  local model response answer
-  model=$(curl -sS --max-time 20 "$CE_HOST/v1/models" -H "authorization: Bearer $CE_KEY" |
-    jq -r '.data[0].id // empty' 2>/dev/null || true)
-  if [[ -n $model ]]; then
-    response=$(curl -sS --max-time 180 -X POST "$CE_HOST/v1/chat/completions" \
-      -H "authorization: Bearer $CE_KEY" -H "content-type: application/json" \
-      --data-binary "$(jq -nc --arg m "$model" --arg q "$question" \
-        '{model: $m, stream: false, messages: [{role: "user", content: $q}]}')" || true)
-    answer=$(jq -r '.choices[0].message.content // empty' <<<"$response" 2>/dev/null || true)
-    if [[ -n $answer ]]; then
-      echo "$answer"
-      return
-    fi
-  fi
-  local why
-  why=$(jq -r '.error.message // empty' <<<"${response:-}" 2>/dev/null || true)
-  [[ -n $why ]] || why="The engine's agent did not answer this key."
-  echo "($why Showing what it remembers instead.)" >&2
-  cmd_find "$question"
+  source "$CE_DIR/lib/agents.sh"
+  local agent
+  agent=$(omarchy-default-agent 2>/dev/null || true)
+  [[ -n $agent ]] || return 0
+  valid_agent "$agent" && agent_installed "$agent" || return 0
+  "${agent}_connected" || "${agent}_connect" </dev/null
 }
 
 cmd_tool() {
@@ -371,7 +357,6 @@ Usage: ce <command> [args]
   find [query]          Search memory (no query: most recent)
   get <type::slug>      Open one memory
   remember [text]       Save a note (stdin works; --decision --why, --task, --tag)
-  ask <question>        Ask the engine's own agent (metered)
 
   connect [agent…]      Give coding agents the engine over MCP
   disconnect [agent…]   Remove it again
@@ -396,7 +381,7 @@ main() {
   find | search) cmd_find "$@" ;;
   get) cmd_get "$@" ;;
   remember | save | note) cmd_remember "$@" ;;
-  ask) cmd_ask "$@" ;;
+  ensure-agent) cmd_ensure_agent ;;
   tool) cmd_tool "$@" ;;
   mcp-url) cmd_mcp_url ;;
   open) xdg-open "$CE_HOST" >/dev/null 2>&1 & ;;

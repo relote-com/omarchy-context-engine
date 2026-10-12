@@ -6,6 +6,8 @@ import qs.Commons
 import qs.Ui
 
 // One box for the engine: find, remember, ask, or read what changed.
+// Ask is not answered here: it hands the question to Omarchy's default agent
+// (omarchy agent prompt), which reads the engine through its MCP server.
 // Summon with a mode:
 //   omarchy-shell shell summon relote.context-engine '{"mode":"find"}'
 // Tab cycles modes, Enter runs, Esc clears then closes. All engine traffic
@@ -25,7 +27,7 @@ Item {
   readonly property var placeholders: ({
     find: "Search your memory…",
     remember: "Something worth keeping — first line is the title",
-    ask: "Ask your engine's agent…",
+    ask: "Ask your agent — it reads your engine…",
     brief: "Enter to load what changed since you last looked"
   })
 
@@ -99,11 +101,22 @@ Item {
       root.dismiss()
       return
     }
-    if (root.mode === "ask" && !text) return
+    if (root.mode === "ask") {
+      if (!text) return
+      // Connect the default agent first if it has no engine yet, then open it
+      // with the question; with no default agent, Omarchy offers the picker.
+      Util.execArgv(["bash", "-c",
+        '"$1" ensure-agent >/dev/null 2>&1; ' +
+        'if [[ -n $(omarchy-default-agent) ]]; then exec omarchy-agent-prompt "$2"; ' +
+        'else exec omarchy-agent --pick; fi',
+        "ce-ask", root.ce, text])
+      input.text = ""
+      root.dismiss()
+      return
+    }
     if (runProc.running) return
 
     var args = root.mode === "find" ? ["find", "--markdown", "--limit", "10"].concat(text ? [text] : [])
-             : root.mode === "ask" ? ["ask", text]
              : ["brief"]
     root.busy = true
     root.error = ""
@@ -143,7 +156,7 @@ Item {
         root.error = note || "The engine did not answer."
         return
       }
-      // A note on a success (ask falling back to find) says why, above the answer.
+      // A note on a success says why, above the result.
       root.result = (note ? "_" + note + "_\n\n" : "") + (out || "Nothing found.")
     }
   }
@@ -277,7 +290,7 @@ Item {
             width: results.width
             wrapMode: Text.Wrap
             textFormat: root.error || root.busy || root.mode === "brief" ? Text.PlainText : Text.MarkdownText
-            text: root.busy ? (root.mode === "ask" ? "Thinking…" : "Looking…")
+            text: root.busy ? "Looking…"
                 : root.error ? root.error
                 : root.result
             color: root.foreground

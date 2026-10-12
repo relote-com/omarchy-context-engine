@@ -72,6 +72,7 @@ install_menu() {
 $MENU_BEGIN
   "context-engine": {"icon":"󰧑","label":"Context Engine","description":"Memory shared by every agent","aliases":["memory","brain"]},
   "context-engine.find": {"icon":"","label":"Find in memory","action":"omarchy-shell shell summon $PLUGIN_ID '{\"mode\":\"find\"}'"},
+  "context-engine.ask": {"icon":"󰚩","label":"Ask your agent","description":"Opens your default agent, which reads the engine","action":"omarchy-shell shell summon $PLUGIN_ID '{\"mode\":\"ask\"}'"},
   "context-engine.remember": {"icon":"󰆓","label":"Remember…","action":"omarchy-shell shell summon $PLUGIN_ID '{\"mode\":\"remember\"}'"},
   "context-engine.brief": {"icon":"󰃭","label":"What changed","action":"omarchy-shell shell summon $PLUGIN_ID '{\"mode\":\"brief\"}'"},
   "context-engine.agents": {"icon":"󰚩","label":"Connect agents","action":"omarchy-launch-floating-terminal-with-presentation '$BIN_LINK connect; $BIN_LINK agents'"},
