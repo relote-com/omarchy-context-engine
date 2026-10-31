@@ -348,7 +348,8 @@ Item {
             opacity: root.busy ? 0.6 : 1
             font.family: Style.font.family
             font.pixelSize: Style.font.body
-            onLinkActivated: function(link) { Qt.openUrlExternally(link) }
+            // Only web links leave the box, whatever the result text held.
+            onLinkActivated: function(link) { if (/^https?:\/\//i.test(link)) Qt.openUrlExternally(link) }
           }
         }
 

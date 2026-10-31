@@ -397,14 +397,16 @@ cmd_find() {
   elif $styled; then
     # For the overlay, in Qt's StyledText (the HTML subset whose links take
     # the theme's colour): a linked title, where it lives, the start of the
-    # body. Engine text is escaped, and only an http(s) url becomes a link;
-    # StyledText reads an href raw, so there only quotes and whitespace are
-    # encoded (control characters dropped).
+    # body. Engine text is escaped, and only an http(s) url becomes a link.
+    # StyledText reads an href raw and ends it at either quote, so every
+    # character outside a URL's safe set ('"' and "'" among them) is
+    # percent-encoded there instead.
     jq -r "$JQ_DEFS"'
       def esc: gsub("&"; "&amp;") | gsub("<"; "&lt;") | gsub(">"; "&gt;") | gsub("\""; "&quot;");
+      def href: [explode[] | [.] | implode | if test("^[A-Za-z0-9._~:/?#\\[\\]@!$&()*+,;=%-]$") then . else @uri end] | add;
       .data.hits // [] | if length == 0 then "Nothing found." else map(
         ((.title // .ref // "") | esc) as $title
-        | "<b>" + (if (.url // "") | test("^https?://") then "<a href=\"\(.url | gsub("[\u0000-\u001f\u007f-\u009f]"; "") | gsub("\\s"; "%20") | gsub("\""; "%22"))\">\($title)</a>" else $title end) + "</b><br>"
+        | "<b>" + (if (.url // "") | test("^https?://") then "<a href=\"\(.url | href)\">\($title)</a>" else $title end) + "</b><br>"
           + "<i>" + ([.type, (.engine.name // .engine.slug), (.updated_at // "")[0:10], (machine | select(.) | "machine:" + .)]
               | meta | esc) + "</i><br>"
           + ((.body // "") | gsub("\\s+"; " ") | .[0:220] | esc)
