@@ -41,7 +41,14 @@ claude_connect() {
     '{type: "http", url: $url, headersHelper: $helper}')" >/dev/null
 }
 
-claude_disconnect() { claude mcp remove --scope user "$SERVER_NAME" >/dev/null 2>&1; }
+# Without the CLI (Claude Code removed since), straight from its user config.
+claude_disconnect() {
+  if agent_installed claude; then
+    claude mcp remove --scope user "$SERVER_NAME" >/dev/null 2>&1 || ! claude_connected
+  else
+    json_del "${CLAUDE_CONFIG_DIR:-$HOME}/.claude.json" mcpServers
+  fi
+}
 
 # --- codex ------------------------------------------------------------------
 # https://learn.chatgpt.com/docs/config-file/config-reference:
@@ -70,7 +77,7 @@ codex_connected() { grep -qxF "[mcp_servers.$SERVER_NAME]" "$CODEX_CONFIG" 2>/de
 codex_connect() {
   new_file "$CODEX_CONFIG"
   keep_mode "$CODEX_CONFIG"
-  codex_strip
+  codex_strip || return 1
   end_line "$CODEX_CONFIG"
   cat >>"$CODEX_CONFIG" <<EOF
 $CODEX_BEGIN
@@ -114,8 +121,13 @@ json_has() {
 }
 
 # json_del <file> <key>: drop our server, and the object holding it if that
-# leaves it empty.
+# leaves it empty. A file jq cannot read that still names the server (say the
+# person added a comment) fails, so the caller keeps its record.
 json_del() {
+  if [[ -f $1 ]] && ! jq -e . "$1" >/dev/null 2>&1 && grep -qF "\"$SERVER_NAME\"" "$1"; then
+    echo "  $1 is not plain JSON any more; remove $SERVER_NAME from it by hand" >&2
+    return 1
+  fi
   json_has "$1" "$2" || return 0
   rewrite "$1" jq --arg n "$SERVER_NAME" --arg k "$2" \
     'del(.[$k][$n]) | if .[$k] == {} then del(.[$k]) else . end' "$1"
@@ -174,7 +186,7 @@ hermes_strip() { strip_block "$HERMES_CONFIG" "$HERMES_BEGIN" "$HERMES_END"; }
 hermes_connected() { grep -qxF "$HERMES_BEGIN" "$HERMES_CONFIG" 2>/dev/null; }
 
 hermes_connect() {
-  hermes_strip
+  hermes_strip || return 1
   if grep -q '^mcp_servers:' "$HERMES_CONFIG" 2>/dev/null; then
     cat >&2 <<EOF
   $HERMES_CONFIG already has mcp_servers; add this under it, then /reload-mcp:
@@ -253,33 +265,36 @@ agents_connect() {
   return $failed
 }
 
-# v0.1.0 kept no record of what it connected. A signed-in computer with no
-# record is a v0.1.0 install: the agents connected then are ce's.
+# v0.1.0 kept no record of what it connected; v0.2.0 starts one at sign-in.
+# A signed-in computer with no record is a v0.1.0 install: the agents
+# connected then are ce's. Runs once: afterwards the record exists.
 adopt_v01() {
   [[ -f $CONFIG_FILE && ! -f $STATE_FILE ]] || return 0
   local agent
   for agent in "${AGENTS[@]}"; do
     agent_installed "$agent" && "${agent}_connected" && remember "agent $agent"
   done
-  return 0
+  (
+    umask 077
+    : >>"$STATE_FILE"
+  )
 }
 
 # With no names: what ce connected, including agents since uninstalled, whose
-# config files still hold the key (Claude Code's goes with Claude Code).
+# config files still hold the key.
 # A name given on the command line is disconnected whoever added it.
 agents_disconnect() {
   local agent
   while read -r agent; do
     [[ -n $agent ]] || continue
     valid_agent "$agent" || continue
-    if [[ $agent == claude ]] && ! agent_installed claude; then
-      forget "agent claude"
-      continue
-    fi
     (($#)) || remembered "agent $agent" || continue
-    "${agent}_disconnect" </dev/null || true
-    forget "agent $agent"
-    echo "  $agent: disconnected"
+    if "${agent}_disconnect" </dev/null; then
+      forget "agent $agent"
+      echo "  $agent: disconnected"
+    else
+      echo "  $agent: still connected, needs a hand (see above)"
+    fi
   done < <((($#)) && printf '%s\n' "$@" || printf '%s\n' "${AGENTS[@]}")
 }
 
@@ -297,3 +312,5 @@ agents_agents() {
     printf '  %-9s %s%s\n' "$agent" "$state" "$([[ $agent == "$default" ]] && echo "  (Omarchy default)")"
   done
 }
+
+adopt_v01

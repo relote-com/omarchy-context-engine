@@ -187,7 +187,8 @@ setup_setup() {
   if [[ -n $CE_KEY ]] && tool brief >/dev/null 2>&1; then
     echo "  already signed in (saving to ${CE_ENGINE:-?})"
   else
-    interactive || die "sign in first: ce login <keyfile"
+    # A key can be piped in; a terminal that cannot show a prompt cannot ask.
+    [[ -t 0 ]] && ! interactive && die "sign in first: ce login <keyfile"
     cmd_login
     load_config
   fi

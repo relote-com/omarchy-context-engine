@@ -99,13 +99,21 @@ cat >"$WORK/replies/find.json" <<'EOF'
    "fields": {"tags": ["machine:desk"]}}]}}
 EOF
 
-# A fresh HOME for each scenario. PATH is the stubs and the system's own
-# tools, so an agent installed on the machine running the tests never counts.
+# PATH is the stubs and links to the few tools ce and these tests use, so an
+# agent installed on the machine running the tests never counts.
+TOOLS="$WORK/tools"
+mkdir -p "$TOOLS"
+for tool in awk bash cat chmod cmp cp cut date diff dirname find grep head jq ln mkdir mktemp mv \
+  readlink rm rmdir sed sha256sum sort stat tac tail tr wc; do
+  ln -s "$(command -v "$tool")" "$TOOLS/$tool" || fail "missing tool: $tool"
+done
+
+# A fresh HOME for each scenario.
 new_home() {
   export HOME="$WORK/$1"
   mkdir -p "$HOME"
   unset XDG_CONFIG_HOME CODEX_HOME CLAUDE_CONFIG_DIR CE_HOST CE_KEY CE_ENGINE
-  export PATH="$STUBS:/usr/bin:/bin" CE_TEST_LOG="$LOG" CE_TEST_REPLIES="$WORK/replies" HOSTNAME="$MACHINE"
+  export PATH="$STUBS:$TOOLS" CE_TEST_LOG="$LOG" CE_TEST_REPLIES="$WORK/replies" HOSTNAME="$MACHINE"
 }
 
 login() {
@@ -192,8 +200,10 @@ check "the key is in no command line during setup" bash -c '! grep -qF "$1" "$2"
 # An agent removed after setup still has the key in its config: uninstall
 # takes it out anyway.
 mv "$STUBS/codex" "$WORK/codex.away"
+mv "$STUBS/claude" "$WORK/claude.away"
 "$CE" uninstall >"$LOG/uninstall-fresh" 2>&1 || fail "ce uninstall exited $?"
 mv "$WORK/codex.away" "$STUBS/codex"
+mv "$WORK/claude.away" "$STUBS/claude"
 after=$(tree_of)
 check "claude: the server is gone again" \
   jq -e --arg n "$server" '.mcpServers | has($n) | not' "$HOME/.claude.json"
@@ -246,6 +256,29 @@ check "a config jq cannot change is left exactly as it was" \
 check "and ce says the agent needs a hand" grep -qF "opencode: needs a hand" "$LOG/connect-odd"
 check "no staging file is left next to it" \
   test -z "$(find "$HOME/.config/opencode" -name 'opencode.json.*')"
+
+# --- a config that stops being plain JSON after connect ----------------------
+
+new_home commented
+mkdir -p "$HOME/.cursor"
+login
+"$CE" connect cursor >/dev/null 2>&1
+sed -i '1a // my comment' "$HOME/.cursor/mcp.json"
+"$CE" disconnect >"$LOG/disconnect-commented" 2>&1
+check "disconnect says it could not remove the server" grep -qF "cursor: still connected" "$LOG/disconnect-commented"
+check "and keeps its record, so uninstall can try again" \
+  grep -qxF "agent cursor" "$HOME/.config/context-engine/installed"
+
+# --- a v0.1.0 install: signed in, nothing recorded ---------------------------
+
+new_home v01
+mkdir -p "$HOME/.codex" "$HOME/.config/context-engine"
+printf 'CE_HOST=%s\nCE_KEY=%s\nCE_ENGINE=omarchy\n' "$URL" "$KEY" >"$HOME/.config/context-engine/config"
+printf 'model = "gpt"\n\n[mcp_servers.context-engine]\nurl = "%s/mcp"\n' "$URL" >"$HOME/.codex/config.toml"
+"$CE" uninstall >"$LOG/uninstall-v01" 2>&1
+check "v0.1.0's codex server is taken as ce's and removed" \
+  bash -c '! grep -qF "[mcp_servers.context-engine]" "$1"' _ "$HOME/.codex/config.toml"
+check "the person's codex settings stay" grep -qxF 'model = "gpt"' "$HOME/.codex/config.toml"
 
 # --- the plugin folder -------------------------------------------------------
 

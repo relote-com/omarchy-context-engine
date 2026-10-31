@@ -56,8 +56,10 @@ rewrite() {
   local file=$1 tmp status=0
   shift
   tmp=$(mktemp "$file.XXXXXX") || return 1
+  trap 'rm -f "$tmp"; exit 130' INT TERM
   "$@" >"$tmp" && cat "$tmp" >"$file" || status=1
   rm -f "$tmp"
+  trap - INT TERM
   return $status
 }
 
@@ -520,13 +522,11 @@ main() {
   open) xdg-open "$CE_HOST" >/dev/null 2>&1 & ;;
   connect | disconnect | agents)
     source "$CE_DIR/lib/agents.sh"
-    adopt_v01
     "agents_$command" "$@"
     ;;
   setup | uninstall)
     source "$CE_DIR/lib/agents.sh"
     source "$CE_DIR/lib/setup.sh"
-    adopt_v01
     "setup_$command" "$@"
     ;;
   version | --version) echo "$VERSION" ;;
