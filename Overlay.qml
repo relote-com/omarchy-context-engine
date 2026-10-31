@@ -39,7 +39,7 @@ Item {
   property string engine: ""
   property bool busy: false
   property string result: ""
-  property string query: ""           // Find/Ask's text while Remember is open
+  property string query: ""           // the other modes' text while Remember is open
   property string draft: ""           // Remember's text while another mode is open
   property string error: ""
 
@@ -56,23 +56,20 @@ Item {
     var payload = ({})
     try { payload = JSON.parse(payloadJson || "{}") } catch (e) { payload = ({}) }
     var nextMode = root.modes.indexOf(payload.mode) >= 0 ? payload.mode : "find"
-    var reopenSame = root.opened && nextMode === root.mode
+    var fresh = !root.opened
 
-    if (root.opened) {
-      // Summoned while open: like a Tab, so neither text is lost.
-      if (!reopenSame) root.setMode(nextMode)
-    } else {
-      root.mode = nextMode
-      root.result = ""
-      root.error = ""
+    // Summoned while open, it switches like a Tab, so neither text is lost.
+    // A fresh open starts empty, or with the text it was summoned with.
+    if (fresh) {
       root.query = ""
       root.draft = ""
       input.text = ""
+      root.mode = ""
     }
-    if (payload.text) input.text = payload.text
     root.opened = true
+    if (nextMode !== root.mode) root.setMode(nextMode)
+    if (fresh && payload.text) input.text = payload.text
     statusProc.running = true
-    if (root.mode === "brief" && !root.result) root.run()
     Qt.callLater(function() { input.forceActiveFocus() })
   }
 
@@ -301,7 +298,7 @@ Item {
             }
             placeholderText: root.status === "not-signed-in"
               ? "Not connected — press Enter to set up Context Engine"
-              : root.placeholders[root.mode]
+              : root.placeholders[root.mode] || ""
             readOnly: root.mode === "brief"
 
             Keys.priority: Keys.BeforeItem

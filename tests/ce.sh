@@ -111,7 +111,7 @@ cat >"$WORK/replies/brief.json" <<'EOF'
 EOF
 cat >"$WORK/replies/find.json" <<'EOF'
 {"text": "1 hit", "data": {"hits": [
-  {"ref": "note::gaps", "type": "note", "title": "Gaps are 5", "url": "https://engine.test/n?a=1&b=2 x", "engine": {"slug": "omarchy", "name": "Omarchy"},
+  {"ref": "note::gaps", "type": "note", "title": "Gaps are 5", "url": "https://engine.test/n?a=1&b=2 x\t\"y", "engine": {"slug": "omarchy", "name": "Omarchy"},
    "fields": {"tags": ["omarchy", "machine:air-13"]}},
   {"ref": "note::older", "type": "note", "title": "Older <draft>", "url": "file:///etc/passwd", "engine": {"slug": "omarchy", "name": "Omarchy"},
    "fields": {"tags": ["machine:desk"]}}]}}
@@ -168,7 +168,7 @@ check "ce brief lists only what changed" \
 styled=$("$CE" find --styled gaps)
 check "the overlay's find results show the machine, in italics" grep -qF "· machine:air-13</i>" <<<"$styled"
 check "the overlay's find results keep a link's url readable (StyledText reads href raw)" \
-  grep -qF '<a href="https://engine.test/n?a=1&b=2%20x">' <<<"$styled"
+  grep -qF '<a href="https://engine.test/n?a=1&b=2%20x%22y">' <<<"$styled"
 check "the overlay's find results escape engine text and link only http(s)" \
   bash -c 'grep -qF "<b>Older &lt;draft&gt;</b>" <<<"$1" && ! grep -qF "file:" <<<"$1"' _ "$styled"
 check "ce brief is still the engine's brief, as agents read it" grep -qF "NEVER STORE" <<<"$brief"
