@@ -6,7 +6,6 @@
 # not ce's (another `ce` on PATH, a skill of the same name) is left alone.
 # Re-running setup is safe.
 
-PLUGIN_ID=$(jq -r '.id' "$CE_DIR/manifest.json")
 BIN_LINK="$HOME/.local/bin/ce"
 # What the menu and the hook run: the plugin's own ce, whatever else is on PATH.
 CE_BIN="$CE_DIR/bin/ce"
@@ -258,7 +257,7 @@ setup_uninstall() {
   fi
   if [[ -f $STATE_FILE ]]; then
     restore_modes
-    rm -f "$CONFIG_FILE"
+    remove_config
     local state
     state=$(cat "$STATE_FILE")
     rm "$STATE_FILE"

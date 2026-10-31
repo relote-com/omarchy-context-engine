@@ -2,6 +2,7 @@ import Quickshell
 import Quickshell.Io
 import Quickshell.Wayland
 import QtQuick
+import QtQuick.Controls as Controls
 import qs.Commons
 import qs.Ui
 
@@ -10,7 +11,8 @@ import qs.Ui
 // (omarchy agent prompt), which reads the engine through its MCP server.
 // Summon with a mode:
 //   omarchy-shell shell summon relote.context-engine '{"mode":"find"}'
-// Tab cycles modes, Enter runs, Esc clears then closes. All engine traffic
+// Tab cycles modes, Enter runs (Shift+Enter starts a new line in Remember),
+// Esc clears then closes. All engine traffic
 // goes through bin/ce, so the overlay holds no key and speaks no HTTP itself.
 
 Item {
@@ -26,7 +28,7 @@ Item {
   readonly property var modeLabels: ({ find: "Find", remember: "Remember", ask: "Ask", brief: "What changed" })
   readonly property var placeholders: ({
     find: "Search your memory…",
-    remember: "Something worth keeping — first line is the title",
+    remember: "Something worth keeping — first line is the title, Shift+Enter for more",
     ask: "Ask your agent — it reads your engine…",
     brief: "Enter to load what changed since you last looked"
   })
@@ -37,10 +39,16 @@ Item {
   property string engine: ""
   property bool busy: false
   property string result: ""
+  property string query: ""           // the other modes' text while Remember is open
+  property string draft: ""           // Remember's text while another mode is open
   property string error: ""
+  // How the result was written: only ce find --styled escapes engine text
+  // for StyledText, so the format goes with the command, not the mode.
+  property bool styled: false
 
   property color background: Color.menu.background
   property color foreground: Color.menu.text
+  property color accent: Color.menu.selectedText
   property color scrim: Color.menu.scrim
   property var borderSpec: Border.surfaceSpec("menu", "border", Color.menu.border, Math.max(1, Style.space(2)))
   readonly property int pad: Style.spacing.panelPadding
@@ -51,18 +59,25 @@ Item {
     var payload = ({})
     try { payload = JSON.parse(payloadJson || "{}") } catch (e) { payload = ({}) }
     var nextMode = root.modes.indexOf(payload.mode) >= 0 ? payload.mode : "find"
-    var reopenSame = root.opened && nextMode === root.mode
+    var fresh = !root.opened
 
-    root.mode = nextMode
-    root.opened = true
-    if (!reopenSame) {
-      root.result = ""
-      root.error = ""
-      input.text = payload.text || ""
+    // Summoned while open, it switches like a Tab, so neither text is lost.
+    // A fresh open starts empty, or with the text it was summoned with.
+    if (fresh) {
+      root.query = ""
+      root.draft = ""
+      input.text = ""
+      root.mode = ""
     }
+    root.opened = true
+    if (nextMode !== root.mode) root.setMode(nextMode)
+    if (fresh && payload.text) input.text = payload.text
     statusProc.running = true
-    if (root.mode === "brief" && !root.result) root.run()
     Qt.callLater(function() { input.forceActiveFocus() })
+  }
+
+  function escaped(text) {
+    return String(text).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
   }
 
   function close() {
@@ -76,10 +91,21 @@ Item {
 
   function cycle(step) {
     var i = root.modes.indexOf(root.mode)
-    root.mode = root.modes[(i + step + root.modes.length) % root.modes.length]
+    root.setMode(root.modes[(i + step + root.modes.length) % root.modes.length])
+  }
+
+  function setMode(next) {
+    // A query carries from Find into Ask as the start of a question, but
+    // Remember keeps its own text: a query is not a title, a note is not a
+    // query, and each survives a Tab away and back.
+    if ((root.mode === "remember") !== (next === "remember")) {
+      if (next === "remember") { root.query = input.text; input.text = root.draft }
+      else { root.draft = input.text; input.text = root.query }
+    }
+    root.mode = next
     root.result = ""
     root.error = ""
-    if (root.mode === "brief") root.run()
+    if (next === "brief") root.run()
   }
 
   function setup() {
@@ -116,9 +142,10 @@ Item {
     }
     if (runProc.running) return
 
-    var args = root.mode === "find" ? ["find", "--markdown", "--limit", "10"].concat(text ? [text] : [])
-             : ["brief"]
+    var args = root.mode === "find" ? ["find", "--styled", "--limit", "10"].concat(text ? [text] : [])
+             : ["brief", "--summary"]
     root.busy = true
+    root.styled = root.mode === "find"
     root.error = ""
     root.result = ""
     runProc.command = [root.ce].concat(args)
@@ -156,8 +183,9 @@ Item {
         root.error = note || "The engine did not answer."
         return
       }
-      // A note on a success says why, above the result.
-      root.result = (note ? "_" + note + "_\n\n" : "") + (out || "Nothing found.")
+      // A note on a success says why, above the result, in the result's format.
+      if (note) note = root.styled ? "<i>" + root.escaped(note) + "</i><br><br>" : note + "\n\n"
+      root.result = note + out
     }
   }
 
@@ -237,10 +265,7 @@ Item {
               MouseArea {
                 anchors.fill: parent
                 onClicked: {
-                  root.mode = modelData
-                  root.result = ""
-                  root.error = ""
-                  if (modelData === "brief") root.run()
+                  root.setMode(modelData)
                   input.forceActiveFocus()
                 }
               }
@@ -248,33 +273,62 @@ Item {
           }
         }
 
-        TextField {
-          id: input
+        // Multi-line, for Remember's title and body: grows with the note up
+        // to half the results' height, then scrolls. Styled like the kit's
+        // TextField, which only comes single-line.
+        Controls.ScrollView {
           width: parent.width
-          foreground: root.foreground
-          font.pixelSize: Style.font.heading
-          placeholderText: root.status === "not-signed-in"
-            ? "Not connected — press Enter to set up Context Engine"
-            : root.placeholders[root.mode]
-          readOnly: root.mode === "brief"
+          height: Math.min(input.implicitHeight, Math.round(root.resultMax / 2))
+          Controls.ScrollBar.horizontal.policy: Controls.ScrollBar.AlwaysOff
 
-          Keys.priority: Keys.BeforeItem
-          Keys.onPressed: function(event) {
-            if (event.key === Qt.Key_Escape) {
-              if (input.text) input.text = ""
-              else root.dismiss()
-              event.accepted = true
-            } else if (event.key === Qt.Key_Tab || event.key === Qt.Key_Backtab) {
-              root.cycle(event.key === Qt.Key_Backtab || (event.modifiers & Qt.ShiftModifier) ? -1 : 1)
-              event.accepted = true
-            } else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
-              root.run()
-              event.accepted = true
+          Controls.TextArea {
+            id: input
+            readonly property var borderSpec: Border.controlSpec(activeFocus ? "focus" : (hovered ? "hover-cursor" : "normal"), root.foreground, Color.accent)
+            wrapMode: TextEdit.Wrap
+            color: root.foreground
+            selectionColor: Style.selectionFillFor(root.foreground, Color.accent)
+            selectedTextColor: root.foreground
+            placeholderTextColor: Qt.darker(root.foreground, 1.6)
+            font.family: Style.font.family
+            font.pixelSize: Style.font.heading
+            leftPadding: Style.spacing.controlPaddingX + Border.left(borderSpec)
+            rightPadding: Style.spacing.controlPaddingX + Border.right(borderSpec)
+            topPadding: Style.spacing.inputPaddingY + Border.top(borderSpec)
+            bottomPadding: Style.spacing.inputPaddingY + Border.bottom(borderSpec)
+            background: BorderSurface {
+              color: Style.controlFill(input.activeFocus, input.hovered, root.foreground, Color.accent)
+              borderSpec: input.borderSpec
+              radius: Style.cornerRadius
+            }
+            placeholderText: root.status === "not-signed-in"
+              ? "Not connected — press Enter to set up Context Engine"
+              : root.placeholders[root.mode] || ""
+            readOnly: root.mode === "brief"
+
+            Keys.priority: Keys.BeforeItem
+            Keys.onPressed: function(event) {
+              if (event.key === Qt.Key_Escape) {
+                if (input.text) input.text = ""
+                else root.dismiss()
+                event.accepted = true
+              } else if (event.key === Qt.Key_Tab || event.key === Qt.Key_Backtab) {
+                root.cycle(event.key === Qt.Key_Backtab || (event.modifiers & Qt.ShiftModifier) ? -1 : 1)
+                event.accepted = true
+              } else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
+                if (root.mode === "remember" && (event.modifiers & Qt.ShiftModifier)) {
+                  if (input.selectedText) input.remove(input.selectionStart, input.selectionEnd)
+                  input.insert(input.cursorPosition, "\n")
+                } else {
+                  root.run()
+                }
+                event.accepted = true
+              }
             }
           }
         }
 
-        // Results: the engine's own rendering, which is Markdown for a reader.
+        // Results: ce's rendering, StyledText for find (MarkdownText would
+        // paint links in Qt's own blue whatever linkColor says).
         Flickable {
           id: results
           visible: root.busy || root.result !== "" || root.error !== ""
@@ -289,15 +343,17 @@ Item {
             id: resultText
             width: results.width
             wrapMode: Text.Wrap
-            textFormat: root.error || root.busy || root.mode === "brief" ? Text.PlainText : Text.MarkdownText
+            textFormat: root.styled && !root.error && !root.busy ? Text.StyledText : Text.PlainText
             text: root.busy ? "Looking…"
                 : root.error ? root.error
                 : root.result
             color: root.foreground
+            linkColor: root.accent
             opacity: root.busy ? 0.6 : 1
             font.family: Style.font.family
             font.pixelSize: Style.font.body
-            onLinkActivated: function(link) { Qt.openUrlExternally(link) }
+            // Only web links leave the box, whatever the result text held.
+            onLinkActivated: function(link) { if (/^https?:\/\//i.test(link)) Qt.openUrlExternally(link) }
           }
         }
 
@@ -307,7 +363,10 @@ Item {
                   ? "Saving to " + (root.engine || "your engine")
                   : root.status === "unreachable" ? "Context Engine did not answer this key"
                   : root.status === "not-signed-in" ? "Not connected" : "")
-                + "   ·   Tab switch   ·   Enter run   ·   Esc close"
+                + (root.mode === "remember" ? "   ·   Enter save   ·   Shift+Enter new line" : "   ·   Tab switch   ·   Enter run")
+                + "   ·   Esc close"
+          // The engine's slug is the engine's text: never parsed as markup.
+          textFormat: Text.PlainText
           color: root.foreground
           opacity: 0.45
           elide: Text.ElideRight

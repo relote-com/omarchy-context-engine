@@ -80,6 +80,22 @@ add-json)
 esac
 EOF
 
+# omarchy-shell: logs each IPC call, as the running shell would receive it.
+cat >"$STUBS/omarchy-shell" <<'EOF'
+#!/bin/bash
+printf '%s\n' "$*" >>"$CE_TEST_LOG/shell"
+EOF
+
+# gum: says which prompts were shown; the key prompt is answered with $CE_TEST_KEY.
+cat >"$STUBS/gum" <<'EOF'
+#!/bin/bash
+printf '%s\n' "$1" >>"$CE_TEST_LOG/gum"
+[[ $1 == input ]] && printf '%s\n' "$CE_TEST_KEY"
+exit 0
+EOF
+
+printf '#!/bin/bash\necho "$*" >>"$CE_TEST_LOG/opened"\n' >"$STUBS/xdg-open"
+
 for agent in codex opencode hermes gemini; do
   printf '#!/bin/bash\nexit 0\n' >"$STUBS/$agent"
 done
@@ -87,16 +103,22 @@ chmod +x "$STUBS"/*
 
 mkdir -p "$WORK/replies"
 cat >"$WORK/replies/brief.json" <<'EOF'
-{"text": "# Brief\n\n1 change in Omarchy", "data": {
+{"text": "# Brief\n\n1 change in Omarchy\n\nNEVER STORE\nSecrets", "data": {
   "engines": [{"slug": "omarchy", "name": "Omarchy", "access": "write"}],
-  "changed": [{"engine": {"slug": "omarchy", "name": "Omarchy"}, "ref": "note::gaps", "type": "note", "title": "Gaps are 5"}]}}
+  "since": "2026-10-30T09:00:00Z", "omitted": 2, "unanswered": [{"slug": "work", "name": "Work"}],
+  "changed": [{"engine": {"slug": "omarchy", "name": "Omarchy"}, "ref": "note::gaps", "type": "note", "title": "Gaps are 5",
+    "updated": "2026-10-31T08:00:00Z", "change": {"act": "edited", "person": "Ada"}}]}}
 EOF
 cat >"$WORK/replies/find.json" <<'EOF'
 {"text": "1 hit", "data": {"hits": [
-  {"ref": "note::gaps", "type": "note", "title": "Gaps are 5", "engine": {"slug": "omarchy", "name": "Omarchy"},
+  {"ref": "note::gaps", "type": "note", "title": "Gaps are 5", "url": "https://engine.test/n?a=1&b=2 x\t\"y", "engine": {"slug": "omarchy", "name": "Omarchy"},
    "fields": {"tags": ["omarchy", "machine:air-13"]}},
-  {"ref": "note::older", "type": "note", "title": "Older", "engine": {"slug": "omarchy", "name": "Omarchy"},
-   "fields": {"tags": ["machine:desk"]}}]}}
+  {"ref": "note::older", "type": "note", "title": "Older <draft>", "url": "file:///etc/passwd", "engine": {"slug": "omarchy", "name": "Omarchy"},
+   "fields": {"tags": ["machine:desk"]}},
+  {"ref": "note::trap", "type": "note", "title": "Trap", "url": "https://x.test/'href='file:///tmp/a.desktop", "engine": {"slug": "omarchy", "name": "Omarchy"}},
+  {"ref": "note::upper", "type": "note", "title": "Upper", "url": "HTTPS://x.test/Up", "engine": {"slug": "omarchy", "name": "Omarchy"}},
+  {"ref": "note::fold", "type": "note", "title": "Fold", "url": "http\u017f://x.test/", "engine": {"slug": "omarchy", "name": "Omarchy"}},
+  {"ref": "note::odd", "type": "note", "title": "Cut\u0000here", "url": 7, "updated_at": 1e300, "body": 42, "engine": {"slug": "omarchy", "name": "Omarchy"}}]}}
 EOF
 
 # PATH is the stubs and links to the few tools ce and these tests use, so an
@@ -104,7 +126,7 @@ EOF
 TOOLS="$WORK/tools"
 mkdir -p "$TOOLS"
 for tool in awk bash cat chmod cmp cp cut date diff dirname find grep head jq ln mkdir mktemp mv \
-  readlink rm rmdir sed sha256sum sort stat tac tail tr wc; do
+  readlink rm rmdir script sed sha256sum sort stat tac tail tr wc; do
   ln -s "$(command -v "$tool")" "$TOOLS/$tool" || fail "missing tool: $tool"
 done
 
@@ -113,7 +135,7 @@ new_home() {
   export HOME="$WORK/$1"
   mkdir -p "$HOME"
   unset XDG_CONFIG_HOME CODEX_HOME CLAUDE_CONFIG_DIR CE_HOST CE_KEY CE_ENGINE
-  export PATH="$STUBS:$TOOLS" CE_TEST_LOG="$LOG" CE_TEST_REPLIES="$WORK/replies" HOSTNAME="$MACHINE"
+  export PATH="$STUBS:$TOOLS" CE_TEST_LOG="$LOG" CE_TEST_REPLIES="$WORK/replies" CE_TEST_KEY="$KEY" HOSTNAME="$MACHINE"
 }
 
 login() {
@@ -147,8 +169,35 @@ check "ce brief shows which machine saved a change" \
   grep -qF "note::gaps  ←  air-13" <<<"$brief"
 check "ce brief lists only what changed" \
   bash -c '! grep -qF "note::older" <<<"$1"' _ "$brief"
-check "the overlay's find results show the machine" \
-  bash -c '"$1" find --markdown gaps | grep -qF "· machine:air-13_"' _ "$CE"
+styled=$("$CE" find --styled gaps)
+check "the overlay's find results show the machine, in italics" grep -qF "· machine:air-13</i>" <<<"$styled"
+check "the overlay's find results keep a link's url readable (StyledText reads href raw)" \
+  grep -qF '<a href="https://engine.test/n?a=1&b=2%20x%09%22y">' <<<"$styled"
+check "the overlay's find results escape engine text and link only http(s)" \
+  bash -c 'grep -qF "<b>Older &lt;draft&gt;</b>" <<<"$1" && ! grep -oE "href=[^>]*" <<<"$1" | grep -qviE "^href=\"https?://"' _ "$styled"
+check "the scheme test ignores ASCII case only" \
+  bash -c 'grep -qF "<a href=\"HTTPS://x.test/Up\">Upper</a>" <<<"$1" && grep -qF "<b>Fold</b>" <<<"$1"' _ "$styled"
+check "an engine url cannot end the href early with a quote of either kind" \
+  grep -qF '<a href="https://x.test/%27href=%27file:///tmp/a.desktop">Trap</a>' <<<"$styled"
+check "a NUL or a number from the engine cannot cut the results short" \
+  bash -c 'grep -qF "<b>Cut here</b>" <<<"$1" && grep -qF "</i><br>42" <<<"$1"' _ "$styled"
+check "ce brief is still the engine's brief, as agents read it" grep -qF "NEVER STORE" <<<"$brief"
+
+summary=$("$CE" brief --summary)
+check "ce brief --summary lists each change for a person" \
+  grep -qxF "  note · Omarchy · 2026-10-31 · edited by Ada · from air-13" <<<"$summary"
+check "ce brief --summary says since when, what was left out and who did not answer" \
+  bash -c 'grep -qF "since you last looked (2026-10-30)" <<<"$1" && grep -qF "and 2 more" <<<"$1" && grep -qF "Work did not answer" <<<"$1"' _ "$summary"
+check "ce brief --summary leaves out the agents' instructions" \
+  bash -c '! grep -qE "NEVER STORE|# Brief" <<<"$1"' _ "$summary"
+
+# --- the bar icon hears about sign-in and sign-out -------------------------
+
+check "ce login refreshes the bar icon" grep -qxF -- "-q relote.context-engine refresh" "$LOG/shell"
+: >"$LOG/shell"
+"$CE" logout >/dev/null
+check "ce logout refreshes the bar icon" grep -qxF -- "-q relote.context-engine refresh" "$LOG/shell"
+login
 
 # --- the key stays off command lines ---------------------------------------
 
@@ -201,14 +250,26 @@ check "the key is in no command line during setup" bash -c '! grep -qF "$1" "$2"
 # takes it out anyway.
 mv "$STUBS/codex" "$WORK/codex.away"
 mv "$STUBS/claude" "$WORK/claude.away"
+: >"$LOG/shell"
 "$CE" uninstall >"$LOG/uninstall-fresh" 2>&1 || fail "ce uninstall exited $?"
 mv "$WORK/codex.away" "$STUBS/codex"
 mv "$WORK/claude.away" "$STUBS/claude"
 after=$(tree_of)
 check "claude: the server is gone again" \
   jq -e --arg n "$server" '.mcpServers | has($n) | not' "$HOME/.claude.json"
+check "ce uninstall refreshes the bar icon" grep -qxF -- "-q relote.context-engine refresh" "$LOG/shell"
 check "ce uninstall leaves HOME exactly as before ce setup" test "$before" = "$after"
 [[ $before == "$after" ]] || diff <(echo "$before") <(echo "$after")
+
+# --- setup --yes in a terminal: the key prompt is the only question ---------
+
+new_home terminal
+: >"$LOG/gum"
+script -qec "$CE setup --yes" /dev/null >"$LOG/setup-terminal" 2>&1 || fail "ce setup --yes in a terminal exited $?"
+check "ce setup --yes signs in from the key prompt" grep -qF "CE_KEY=$KEY" "$HOME/.config/context-engine/config"
+check "ce setup --yes asks nothing but the key, not even to open the browser" \
+  bash -c '[[ $(cat "$1") == input ]]' _ "$LOG/gum"
+"$CE" uninstall >/dev/null 2>&1
 
 # --- setup without consent: configs the person already has -------------------
 

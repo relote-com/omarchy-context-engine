@@ -21,10 +21,14 @@ SERVER_NAME="context-engine"
 # is uname -n). Every write from ce carries it as a machine:<name> tag, so an
 # engine shared by several machines can say which one saved what.
 MACHINE_TAG="machine:$HOSTNAME"
-# jq: the machine a found memory came from, or null.
-JQ_MACHINE='def machine: [(.fields.tags // [])[] | select(startswith("machine:")) | ltrimstr("machine:")] | first;'
+# jq: the machine a found memory came from, or null; a memory's id across
+# engines; a list of details joined into one line, empty ones left out.
+JQ_DEFS='def machine: [(.fields.tags // [])[] | select(startswith("machine:")) | ltrimstr("machine:")] | first;
+  def id: "\(.engine.slug)/\(.ref)";
+  def meta: map(select(. != null and . != "")) | join(" · ");'
 
-VERSION=$(jq -r '.version' "$CE_DIR/manifest.json" 2>/dev/null || echo dev)
+{ read -r VERSION && read -r PLUGIN_ID; } < <(jq -r '.version, .id' "$CE_DIR/manifest.json" 2>/dev/null) || true
+VERSION=${VERSION:-dev} PLUGIN_ID=${PLUGIN_ID:-relote.context-engine}
 
 CE_HOST="${CE_HOST:-}"
 CE_KEY="${CE_KEY:-}"
@@ -155,6 +159,19 @@ save_config() {
     printf 'CE_HOST=%s\nCE_KEY=%s\nCE_ENGINE=%s\n' "$CE_HOST" "$CE_KEY" "$CE_ENGINE" >"$CONFIG_FILE"
   )
   chmod 600 "$CONFIG_FILE"
+  refresh_bar
+}
+
+remove_config() {
+  rm -f "$CONFIG_FILE"
+  refresh_bar
+}
+
+# The bar icon reads ce status on a long timer; whenever the config changes
+# its IPC handler is told at once. -q: no shell running, or no widget, is fine.
+refresh_bar() {
+  command -v omarchy-shell >/dev/null || return 0
+  omarchy-shell -q "$PLUGIN_ID" refresh >/dev/null 2>&1 </dev/null || true
 }
 
 require_key() {
@@ -220,7 +237,7 @@ Context Engine needs a key for this computer.
   3. Paste the key (it starts with ce_) below.
 
 EOF
-    if command -v xdg-open >/dev/null && gum confirm "Open $CE_HOST in your browser?"; then
+    if command -v xdg-open >/dev/null && ask "Open $CE_HOST in your browser?"; then
       xdg-open "$CE_HOST/agents" >/dev/null 2>&1 &
     fi
     key=$(gum input --password --placeholder "ce_…" --prompt "Key: ") || die "cancelled"
@@ -254,7 +271,7 @@ EOF
 }
 
 cmd_logout() {
-  rm -f "$CONFIG_FILE"
+  remove_config
   echo "Signed out. Claude Code stops reaching the engine now; other agents keep their own copy until: ce disconnect"
 }
 
@@ -294,37 +311,71 @@ cmd_engine() {
   echo "Saving to: $CE_ENGINE"
 }
 
+# ce brief: the engine's brief as agents read it (the skill's fallback when
+# MCP is not there). ce brief --summary: what changed, for a person, from the
+# same data: no instructions, no rules for agents.
 cmd_brief() {
-  local json=false
-  [[ ${1:-} == --json ]] && json=true
-  local brief
+  local format=text
+  case ${1:-} in
+  --json) format=json ;;
+  --summary) format=summary ;;
+  esac
+  local brief machines
   brief=$(tool brief)
-  if $json; then
+  if [[ $format == json ]]; then
     jq '.data' <<<"$brief"
     return
   fi
-  jq -r '.text' <<<"$brief"
-
-  # The brief lists changes without their tags, so which machine saved each
-  # one is read back from the most recent memories' machine: tags.
-  local changed recent
-  changed=$(jq -c '[.data.changed[]? | "\(.engine.slug)/\(.ref)"]' <<<"$brief")
-  [[ $changed != '[]' ]] || return 0
-  recent=$(tool find '{"limit": 50}' 2>/dev/null) || return 0
-  jq -r --argjson changed "$changed" "$JQ_MACHINE"'
-    [.data.hits[]? | select(("\(.engine.slug)/\(.ref)") as $id | $changed | index($id))
-      | {ref, machine: machine} | select(.machine)]
+  if [[ $format == text ]]; then
+    jq -r '.text' <<<"$brief"
+  fi
+  machines=$(machines_of_changes "$brief")
+  if [[ $format == summary ]]; then
+    jq -r --argjson machines "$machines" "$JQ_DEFS"'.data as $d
+      | (if $d.since then "Changed since you last looked (\($d.since[0:10])):"
+         else "Most recent (no earlier visit on record):" end),
+        (if ($d.changed // []) == [] then "  Nothing new." else empty end),
+        ($d.changed[]? | "",
+          "• \(.title // .ref)",
+          "  " + ([.type, (.engine.name // .engine.slug), (.updated // "")[0:10],
+                   (.change | select(.person) | "\(.act) by \(.person)"),
+                   ($machines[id] | select(.) | "from \(.)")] | meta)),
+        (if ($d.omitted // 0) > 0 then "", "…and \($d.omitted) more." else empty end),
+        (($d.unanswered // [])[] | "", "\(.name) did not answer."),
+        ($d.usage // empty | "", .)
+    ' <<<"$brief"
+    return
+  fi
+  jq -r --argjson machines "$machines" "$JQ_DEFS"'
+    [.data.changed[]? | {ref, machine: $machines[id]} | select(.machine)]
     | if length > 0 then "\nFrom which machine:", (.[] | "  \(.ref)  ←  \(.machine)") else empty end
+  ' <<<"$brief"
+}
+
+# machines_of_changes <brief>: {"engine/ref": machine} for the changes it
+# lists. The brief carries no tags, so they are read back from the most
+# recent memories' machine: tags.
+machines_of_changes() {
+  local changed recent
+  changed=$(jq -c "$JQ_DEFS"'[.data.changed[]? | id]' <<<"$1")
+  if [[ $changed == '[]' ]] || ! recent=$(tool find '{"limit": 50}' 2>/dev/null); then
+    echo '{}'
+    return
+  fi
+  jq -c --argjson changed "$changed" "$JQ_DEFS"'
+    [.data.hits[]? | {key: id, value: machine}
+      | select(.value) | select(.key as $id | $changed | index($id))]
+    | from_entries
   ' <<<"$recent"
 }
 
 cmd_find() {
-  local json=false markdown=false limit=8 engine="" types=()
+  local json=false styled=false limit=8 engine="" types=()
   local words=()
   while (($#)); do
     case "$1" in
     --json) json=true; shift ;;
-    --markdown) markdown=true; shift ;;
+    --styled) styled=true; shift ;;
     --limit|-n) limit=${2:?}; shift 2 ;;
     --engine|-e) engine=${2:?}; shift 2 ;;
     --type|-t) types+=("${2:?}"); shift 2 ;;
@@ -343,14 +394,24 @@ cmd_find() {
   result=$(tool find "$body")
   if $json; then
     jq '.data' <<<"$result"
-  elif $markdown; then
-    # For the overlay: a linked title, where it lives, and the start of the body.
-    jq -r "$JQ_MACHINE"'.data.hits // [] | if length == 0 then "Nothing found." else .[] |
-      "**[\(.title)](\(.url // ""))**  \n" +
-      "_\(.type) · \(.engine.name // .engine.slug // "") · \((.updated_at // "")[0:10])" +
-      (machine | if . then " · machine:" + . else "" end) + "_  \n" +
-      ((.body // "") | gsub("\\s+"; " ") | .[0:220]) + "\n"
-      end' <<<"$result"
+  elif $styled; then
+    # For the overlay, in Qt's StyledText (the HTML subset whose links take
+    # the theme's colour): a linked title, where it lives, the start of the
+    # body. Engine text is escaped, and only an http(s) url becomes a link.
+    # StyledText reads an href raw and ends it at either quote, so every
+    # character outside a URL's safe set ('"' and "'" among them) is
+    # percent-encoded there instead.
+    jq -r "$JQ_DEFS"'
+      def esc: tostring | gsub("[\u0000-\u001f\u007f-\u009f\u2028\u2029\u202a-\u202e\u2066-\u2069]"; " ") | gsub("&"; "&amp;") | gsub("<"; "&lt;") | gsub(">"; "&gt;") | gsub("\""; "&quot;");
+      def href: gsub("(?<c>[^A-Za-z0-9._~:/?#\\[\\]@!$&()*+,;=%-])"; .c | @uri);
+      .data.hits // [] | if length == 0 then "Nothing found." else map(
+        ((.title // .ref // "") | esc) as $title
+        | ((.url // "") | tostring) as $url
+        | "<b>" + (if $url | ascii_downcase | test("^https?://") then "<a href=\"\($url | href)\">\($title)</a>" else $title end) + "</b><br>"
+          + "<i>" + ([.type, (.engine.name // .engine.slug), ((.updated_at // "") | tostring)[0:10], (machine | select(.) | "machine:" + .)]
+              | meta | esc) + "</i><br>"
+          + ((.body // "") | tostring | gsub("\\s+"; " ") | .[0:220] | esc)
+      ) | join("<br><br>") end' <<<"$result"
   else
     jq -r '.text' <<<"$result"
   fi
@@ -486,7 +547,7 @@ Usage: ce <command> [args]
   status [--short]      Is this computer connected, and to what
   engine [slug]         Show or set the engine new memories go to
 
-  brief [--json]        What changed since you last looked
+  brief [--summary]     What changed since you last looked (--json: raw)
   find [query]          Search memory (no query: most recent)
   get <type::slug>      Open one memory
   remember [text]       Save a note (stdin works; --decision --why, --task, --tag)
