@@ -111,7 +111,7 @@ cat >"$WORK/replies/brief.json" <<'EOF'
 EOF
 cat >"$WORK/replies/find.json" <<'EOF'
 {"text": "1 hit", "data": {"hits": [
-  {"ref": "note::gaps", "type": "note", "title": "Gaps are 5", "engine": {"slug": "omarchy", "name": "Omarchy"},
+  {"ref": "note::gaps", "type": "note", "title": "Gaps are 5", "url": "https://engine.test/n?a=1&b=2", "engine": {"slug": "omarchy", "name": "Omarchy"},
    "fields": {"tags": ["omarchy", "machine:air-13"]}},
   {"ref": "note::older", "type": "note", "title": "Older <draft>", "url": "file:///etc/passwd", "engine": {"slug": "omarchy", "name": "Omarchy"},
    "fields": {"tags": ["machine:desk"]}}]}}
@@ -167,6 +167,8 @@ check "ce brief lists only what changed" \
   bash -c '! grep -qF "note::older" <<<"$1"' _ "$brief"
 styled=$("$CE" find --styled gaps)
 check "the overlay's find results show the machine, in italics" grep -qF "· machine:air-13</i>" <<<"$styled"
+check "the overlay's find results keep a link's url as it is (StyledText reads href raw)" \
+  grep -qF '<a href="https://engine.test/n?a=1&b=2">' <<<"$styled"
 check "the overlay's find results escape engine text and link only http(s)" \
   bash -c 'grep -qF "<b>Older &lt;draft&gt;</b>" <<<"$1" && ! grep -qF "file:" <<<"$1"' _ "$styled"
 check "ce brief is still the engine's brief, as agents read it" grep -qF "NEVER STORE" <<<"$brief"
@@ -238,6 +240,7 @@ check "the key is in no command line during setup" bash -c '! grep -qF "$1" "$2"
 # takes it out anyway.
 mv "$STUBS/codex" "$WORK/codex.away"
 mv "$STUBS/claude" "$WORK/claude.away"
+: >"$LOG/shell"
 "$CE" uninstall >"$LOG/uninstall-fresh" 2>&1 || fail "ce uninstall exited $?"
 mv "$WORK/codex.away" "$STUBS/codex"
 mv "$WORK/claude.away" "$STUBS/claude"
@@ -254,7 +257,7 @@ new_home terminal
 : >"$LOG/gum"
 script -qec "$CE setup --yes" /dev/null >"$LOG/setup-terminal" 2>&1 || fail "ce setup --yes in a terminal exited $?"
 check "ce setup --yes signs in from the key prompt" grep -qF "CE_KEY=$KEY" "$HOME/.config/context-engine/config"
-check "ce setup --yes asks nothing else, not even to open the browser" \
+check "ce setup --yes asks nothing but the key (yes opens the browser unasked)" \
   bash -c '[[ $(cat "$1") == input ]]' _ "$LOG/gum"
 "$CE" uninstall >/dev/null 2>&1
 

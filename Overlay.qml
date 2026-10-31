@@ -39,6 +39,7 @@ Item {
   property string engine: ""
   property bool busy: false
   property string result: ""
+  property string draft: ""           // Remember's text while another mode is open
   property string error: ""
 
   property color background: Color.menu.background
@@ -61,6 +62,7 @@ Item {
     if (!reopenSame) {
       root.result = ""
       root.error = ""
+      root.draft = ""
       input.text = payload.text || ""
     }
     statusProc.running = true
@@ -87,9 +89,11 @@ Item {
   }
 
   function setMode(next) {
-    // A query carries into Ask as the start of a question; into Remember it
-    // would be saved as the start of the title.
-    if (next === "remember" && root.mode !== "remember") input.text = ""
+    // A query carries into Ask as the start of a question, but Remember keeps
+    // its own draft: Find's query is not a title, and a note survives a Tab
+    // away and back.
+    if (root.mode === "remember") root.draft = input.text
+    if (next === "remember" && root.mode !== "remember") input.text = root.draft
     root.mode = next
     root.result = ""
     root.error = ""
@@ -112,6 +116,7 @@ Item {
       // reports the outcome as a notification either way.
       Util.execArgv([root.ce, "remember", "--quiet", "--notify", text])
       input.text = ""
+      root.draft = ""
       root.dismiss()
       return
     }
@@ -260,50 +265,56 @@ Item {
           }
         }
 
-        // Multi-line, for Remember's title and body. Styled like the kit's
+        // Multi-line, for Remember's title and body: grows with the note up
+        // to half the results' height, then scrolls. Styled like the kit's
         // TextField, which only comes single-line.
-        Controls.TextArea {
-          id: input
-          readonly property var borderSpec: Border.controlSpec(activeFocus ? "focus" : (hovered ? "hover-cursor" : "normal"), root.foreground, Color.accent)
+        Controls.ScrollView {
           width: parent.width
-          wrapMode: TextEdit.Wrap
-          color: root.foreground
-          selectionColor: Style.selectionFillFor(root.foreground, Color.accent)
-          selectedTextColor: root.foreground
-          placeholderTextColor: Qt.darker(root.foreground, 1.6)
-          font.family: Style.font.family
-          font.pixelSize: Style.font.heading
-          leftPadding: Style.spacing.controlPaddingX + Border.left(borderSpec)
-          rightPadding: Style.spacing.controlPaddingX + Border.right(borderSpec)
-          topPadding: Style.spacing.inputPaddingY + Border.top(borderSpec)
-          bottomPadding: Style.spacing.inputPaddingY + Border.bottom(borderSpec)
-          background: BorderSurface {
-            color: Style.controlFill(input.activeFocus, input.hovered, root.foreground, Color.accent)
-            borderSpec: input.borderSpec
-            radius: Style.cornerRadius
-          }
-          placeholderText: root.status === "not-signed-in"
-            ? "Not connected — press Enter to set up Context Engine"
-            : root.placeholders[root.mode]
-          readOnly: root.mode === "brief"
+          height: Math.min(input.implicitHeight, Math.round(root.resultMax / 2))
+          Controls.ScrollBar.horizontal.policy: Controls.ScrollBar.AlwaysOff
 
-          Keys.priority: Keys.BeforeItem
-          Keys.onPressed: function(event) {
-            if (event.key === Qt.Key_Escape) {
-              if (input.text) input.text = ""
-              else root.dismiss()
-              event.accepted = true
-            } else if (event.key === Qt.Key_Tab || event.key === Qt.Key_Backtab) {
-              root.cycle(event.key === Qt.Key_Backtab || (event.modifiers & Qt.ShiftModifier) ? -1 : 1)
-              event.accepted = true
-            } else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
-              if (root.mode === "remember" && (event.modifiers & Qt.ShiftModifier)) {
-                if (input.selectedText) input.remove(input.selectionStart, input.selectionEnd)
-                input.insert(input.cursorPosition, "\n")
-              } else {
-                root.run()
+          Controls.TextArea {
+            id: input
+            readonly property var borderSpec: Border.controlSpec(activeFocus ? "focus" : (hovered ? "hover-cursor" : "normal"), root.foreground, Color.accent)
+            wrapMode: TextEdit.Wrap
+            color: root.foreground
+            selectionColor: Style.selectionFillFor(root.foreground, Color.accent)
+            selectedTextColor: root.foreground
+            placeholderTextColor: Qt.darker(root.foreground, 1.6)
+            font.family: Style.font.family
+            font.pixelSize: Style.font.heading
+            leftPadding: Style.spacing.controlPaddingX + Border.left(borderSpec)
+            rightPadding: Style.spacing.controlPaddingX + Border.right(borderSpec)
+            topPadding: Style.spacing.inputPaddingY + Border.top(borderSpec)
+            bottomPadding: Style.spacing.inputPaddingY + Border.bottom(borderSpec)
+            background: BorderSurface {
+              color: Style.controlFill(input.activeFocus, input.hovered, root.foreground, Color.accent)
+              borderSpec: input.borderSpec
+              radius: Style.cornerRadius
+            }
+            placeholderText: root.status === "not-signed-in"
+              ? "Not connected — press Enter to set up Context Engine"
+              : root.placeholders[root.mode]
+            readOnly: root.mode === "brief"
+
+            Keys.priority: Keys.BeforeItem
+            Keys.onPressed: function(event) {
+              if (event.key === Qt.Key_Escape) {
+                if (input.text) input.text = ""
+                else root.dismiss()
+                event.accepted = true
+              } else if (event.key === Qt.Key_Tab || event.key === Qt.Key_Backtab) {
+                root.cycle(event.key === Qt.Key_Backtab || (event.modifiers & Qt.ShiftModifier) ? -1 : 1)
+                event.accepted = true
+              } else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
+                if (root.mode === "remember" && (event.modifiers & Qt.ShiftModifier)) {
+                  if (input.selectedText) input.remove(input.selectionStart, input.selectionEnd)
+                  input.insert(input.cursorPosition, "\n")
+                } else {
+                  root.run()
+                }
+                event.accepted = true
               }
-              event.accepted = true
             }
           }
         }
