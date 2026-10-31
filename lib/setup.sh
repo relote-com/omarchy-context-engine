@@ -8,6 +8,8 @@
 
 PLUGIN_ID=$(jq -r '.id' "$CE_DIR/manifest.json")
 BIN_LINK="$HOME/.local/bin/ce"
+# What the menu and the hook run: the plugin's own ce, whatever else is on PATH.
+CE_BIN="$CE_DIR/bin/ce"
 SKILL_SRC="$CE_DIR/skills/context-engine"
 # The same skill folders Omarchy links its own skills into, plus OpenCode's.
 SKILL_DIRS=(
@@ -90,17 +92,17 @@ $MENU_BEGIN
   "context-engine.ask": {"icon":"󰚩","label":"Ask your agent","description":"Opens your default agent, which reads the engine","action":"omarchy-shell shell summon $PLUGIN_ID '{\"mode\":\"ask\"}'"},
   "context-engine.remember": {"icon":"󰆓","label":"Remember…","action":"omarchy-shell shell summon $PLUGIN_ID '{\"mode\":\"remember\"}'"},
   "context-engine.brief": {"icon":"󰃭","label":"What changed","action":"omarchy-shell shell summon $PLUGIN_ID '{\"mode\":\"brief\"}'"},
-  "context-engine.agents": {"icon":"󰚩","label":"Connect agents","action":"omarchy-launch-floating-terminal-with-presentation '$BIN_LINK connect; $BIN_LINK agents'"},
-  "context-engine.setup": {"icon":"","label":"Setup","action":"omarchy-launch-floating-terminal-with-presentation '$BIN_LINK setup'"},
-  "context-engine.console": {"icon":"󰖟","label":"Open console","action":"$BIN_LINK open"},
+  "context-engine.agents": {"icon":"󰚩","label":"Connect agents","action":"omarchy-launch-floating-terminal-with-presentation '$CE_BIN connect; $CE_BIN agents'"},
+  "context-engine.setup": {"icon":"","label":"Setup","action":"omarchy-launch-floating-terminal-with-presentation '$CE_BIN setup'"},
+  "context-engine.console": {"icon":"󰖟","label":"Open console","action":"$CE_BIN open"},
 $MENU_END
 EOF
 )
   # Through the environment, not awk -v, which would eat the JSON's backslashes.
-  CE_MENU_BLOCK=$block awk '
+  CE_MENU_BLOCK=$block rewrite "$MENU_FILE" awk '
     !done && /^[[:space:]]*\{[[:space:]]*$/ { print; print ENVIRON["CE_MENU_BLOCK"]; done = 1; next }
     { print }
-  ' "$MENU_FILE" | rewrite "$MENU_FILE"
+  ' "$MENU_FILE"
   echo "  menu → Omarchy menu › Context Engine"
 }
 
@@ -121,7 +123,6 @@ EOF
   if [[ -f $HYPR_MAIN ]] && ! grep -qF 'require("hypr.context_engine")' "$HYPR_MAIN"; then
     end_line "$HYPR_MAIN"
     printf '%s\n' "$HYPR_REQUIRE" >>"$HYPR_MAIN"
-    remember "line $HYPR_MAIN"
   fi
   if command -v hyprctl >/dev/null && [[ -n ${HYPRLAND_INSTANCE_SIGNATURE:-} ]]; then
     hyprctl reload >/dev/null 2>&1 || true
@@ -132,9 +133,11 @@ EOF
   echo "  keys → Super+Ctrl+M find, Super+Alt+M remember"
 }
 
+# The require line carries ce's own comment, so an exact match is ce's line
+# (v0.1.0's included), and it goes together with the file it loads.
 remove_keys() {
-  if remembered "line $HYPR_MAIN" && [[ -f $HYPR_MAIN ]]; then
-    { grep -vxF "$HYPR_REQUIRE" "$HYPR_MAIN" || true; } | rewrite "$HYPR_MAIN"
+  if [[ -f $HYPR_MAIN ]] && grep -qxF "$HYPR_REQUIRE" "$HYPR_MAIN"; then
+    rewrite "$HYPR_MAIN" without_line "$HYPR_REQUIRE" "$HYPR_MAIN"
   fi
   ce_wrote "$HYPR_FILE" && rm "$HYPR_FILE"
   return 0
@@ -150,7 +153,7 @@ install_hook() {
 #!/bin/bash
 # Context Engine: note each Omarchy update, so "when did this start?" has an answer.
 # Written by ce setup; removed by ce uninstall.
-"$BIN_LINK" remember --quiet --tag omarchy-update \\
+"$CE_BIN" remember --quiet --tag omarchy-update \\
   "Updated Omarchy to \$(omarchy-version 2>/dev/null || cat "\$OMARCHY_PATH/version") on \$(uname -n)" \\
   >/dev/null 2>&1 || true
 EOF
@@ -184,6 +187,7 @@ setup_setup() {
   if [[ -n $CE_KEY ]] && tool brief >/dev/null 2>&1; then
     echo "  already signed in (saving to ${CE_ENGINE:-?})"
   else
+    interactive || die "sign in first: ce login <keyfile"
     cmd_login
     load_config
   fi

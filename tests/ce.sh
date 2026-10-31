@@ -99,14 +99,14 @@ cat >"$WORK/replies/find.json" <<'EOF'
    "fields": {"tags": ["machine:desk"]}}]}}
 EOF
 
-# A fresh HOME for each scenario; ce runs with only the stubs ahead of PATH.
+# A fresh HOME for each scenario. PATH is the stubs and the system's own
+# tools, so an agent installed on the machine running the tests never counts.
 new_home() {
   export HOME="$WORK/$1"
   mkdir -p "$HOME"
   unset XDG_CONFIG_HOME CODEX_HOME CLAUDE_CONFIG_DIR CE_HOST CE_KEY CE_ENGINE
-  export PATH="$STUBS:$ORIGINAL_PATH" CE_TEST_LOG="$LOG" CE_TEST_REPLIES="$WORK/replies" HOSTNAME="$MACHINE"
+  export PATH="$STUBS:/usr/bin:/bin" CE_TEST_LOG="$LOG" CE_TEST_REPLIES="$WORK/replies" HOSTNAME="$MACHINE"
 }
-ORIGINAL_PATH=$PATH
 
 login() {
   printf '%s' "$KEY" >"$WORK/keyfile"
@@ -189,7 +189,11 @@ check "keys and hook added with --yes" \
   test -f "$HOME/.config/hypr/context_engine.lua" -a -x "$HOME/.config/omarchy/hooks/post-update.d/context-engine"
 check "the key is in no command line during setup" bash -c '! grep -qF "$1" "$2"' _ "$KEY" "$LOG/argv"
 
+# An agent removed after setup still has the key in its config: uninstall
+# takes it out anyway.
+mv "$STUBS/codex" "$WORK/codex.away"
 "$CE" uninstall >"$LOG/uninstall-fresh" 2>&1 || fail "ce uninstall exited $?"
+mv "$WORK/codex.away" "$STUBS/codex"
 after=$(tree_of)
 check "claude: the server is gone again" \
   jq -e --arg n "$server" '.mcpServers | has($n) | not' "$HOME/.claude.json"
@@ -218,6 +222,9 @@ check "opencode: merged next to the person's settings" \
   jq -e '.theme == "dark" and .mcp.other and .mcp["context-engine"]' "$HOME/.config/opencode/opencode.json"
 check "codex: appended after the person's settings" \
   bash -c 'head -4 "$1" | cmp -s - <(printf "model = \"gpt\"\n\n[mcp_servers.other]\nurl = \"https://other.example/mcp\"\n")' _ "$HOME/.codex/config.toml"
+check "the menu runs the plugin's ce, not another ce on PATH" \
+  bash -c 'grep -qF "$1/bin/ce setup" "$2" && ! grep -qF "$3 setup" "$2"' _ "$ROOT" \
+  "$HOME/.config/omarchy/extensions/omarchy-menu.jsonc" "$HOME/.local/bin/ce"
 check "keys and hook are not added without a yes" \
   test ! -e "$HOME/.config/hypr/context_engine.lua" -a ! -e "$HOME/.config/omarchy/hooks/post-update.d/context-engine"
 
@@ -225,6 +232,20 @@ check "keys and hook are not added without a yes" \
 after=$(tree_of)
 check "ce uninstall leaves a lived-in HOME exactly as before" test "$before" = "$after"
 [[ $before == "$after" ]] || diff <(echo "$before") <(echo "$after")
+
+# --- a config jq cannot change -----------------------------------------------
+
+new_home odd
+echo '["not", "an", "object"]' >"$WORK/odd.json"
+mkdir -p "$HOME/.config/opencode"
+cp "$WORK/odd.json" "$HOME/.config/opencode/opencode.json"
+login
+"$CE" connect opencode >"$LOG/connect-odd" 2>&1
+check "a config jq cannot change is left exactly as it was" \
+  cmp -s "$WORK/odd.json" "$HOME/.config/opencode/opencode.json"
+check "and ce says the agent needs a hand" grep -qF "opencode: needs a hand" "$LOG/connect-odd"
+check "no staging file is left next to it" \
+  test -z "$(find "$HOME/.config/opencode" -name 'opencode.json.*')"
 
 # --- the plugin folder -------------------------------------------------------
 

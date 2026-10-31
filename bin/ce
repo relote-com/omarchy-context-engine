@@ -14,8 +14,7 @@ CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/context-engine"
 CONFIG_FILE="$CONFIG_DIR/config"
 # What ce wrote outside the plugin folder, one line each, so ce uninstall can
 # undo exactly that: "made <path>" (did not exist before), "mode <path> <octal>"
-# (permissions before ce tightened them), "line <file>" (ce appended its line),
-# "agent <name>", "plugin enabled".
+# (permissions before ce tightened them), "agent <name>", "plugin enabled".
 STATE_FILE="$CONFIG_DIR/installed"
 SERVER_NAME="context-engine"
 # Which computer a write came from, as the system names it (bash's $HOSTNAME
@@ -49,11 +48,25 @@ ask() {
   gum confirm "$question"
 }
 
-# rewrite <file>: replace the file's content with stdin, keeping its inode
-# and mode. The whole of stdin is read before the file is touched.
+# rewrite <file> <command…>: replace the file's content with what the command
+# prints, keeping its inode and mode. If the command fails, the file is left
+# as it was. The staging file is private (mktemp makes it 0600), since the
+# content may hold the key.
 rewrite() {
-  cat >"$1.tmp" && cat "$1.tmp" >"$1"
-  rm -f "$1.tmp"
+  local file=$1 tmp status=0
+  shift
+  tmp=$(mktemp "$file.XXXXXX") || return 1
+  "$@" >"$tmp" && cat "$tmp" >"$file" || status=1
+  rm -f "$tmp"
+  return $status
+}
+
+# without_line <line> <file>: the file minus that exact line (grep -v fails
+# only when it cannot read, not when nothing is left).
+without_line() {
+  local status=0
+  grep -vxF "$1" "$2" || status=$?
+  ((status <= 1))
 }
 
 # end_line <file>: before appending, make sure the last line is ended.
@@ -65,11 +78,11 @@ end_line() {
 # strip_block <file> <begin> <end>: drop the lines between two markers, markers included.
 strip_block() {
   [[ -f $1 ]] || return 0
-  awk -v b="$2" -v e="$3" '
+  rewrite "$1" awk -v b="$2" -v e="$3" '
     $0 == b { skip = 1; next }
     $0 == e { skip = 0; next }
     !skip
-  ' "$1" | rewrite "$1"
+  ' "$1"
 }
 
 remembered() {
@@ -88,7 +101,7 @@ remember() {
 
 forget() {
   [[ -f $STATE_FILE ]] || return 0
-  { grep -vxF "$1" "$STATE_FILE" || true; } | rewrite "$STATE_FILE"
+  rewrite "$STATE_FILE" without_line "$1" "$STATE_FILE"
 }
 
 # mkdir -p that remembers each directory it had to make, outermost first.
@@ -241,7 +254,7 @@ EOF
 
 cmd_logout() {
   rm -f "$CONFIG_FILE"
-  echo "Signed out. Agents keep their own copy until: ce disconnect"
+  echo "Signed out. Claude Code stops reaching the engine now; other agents keep their own copy until: ce disconnect"
 }
 
 cmd_status() {
@@ -507,11 +520,13 @@ main() {
   open) xdg-open "$CE_HOST" >/dev/null 2>&1 & ;;
   connect | disconnect | agents)
     source "$CE_DIR/lib/agents.sh"
+    adopt_v01
     "agents_$command" "$@"
     ;;
   setup | uninstall)
     source "$CE_DIR/lib/agents.sh"
     source "$CE_DIR/lib/setup.sh"
+    adopt_v01
     "setup_$command" "$@"
     ;;
   version | --version) echo "$VERSION" ;;

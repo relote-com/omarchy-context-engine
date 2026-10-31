@@ -58,11 +58,11 @@ CODEX_END="# <<< context-engine"
 codex_strip() {
   strip_block "$CODEX_CONFIG" "$CODEX_BEGIN" "$CODEX_END"
   codex_connected || return 0
-  awk -v header="[mcp_servers.$SERVER_NAME]" '
+  rewrite "$CODEX_CONFIG" awk -v header="[mcp_servers.$SERVER_NAME]" '
     $0 == header { skip = 1; next }
     skip && /^\[/ { skip = 0 }
     !skip
-  ' "$CODEX_CONFIG" | rewrite "$CODEX_CONFIG"
+  ' "$CODEX_CONFIG"
 }
 
 codex_connected() { grep -qxF "[mcp_servers.$SERVER_NAME]" "$CODEX_CONFIG" 2>/dev/null; }
@@ -99,8 +99,13 @@ json_set() {
     return 1
   fi
   keep_mode "$file"
-  CE_AUTH="Bearer $CE_KEY" jq --arg name "$SERVER_NAME" --arg url "$(mcp_url)" "$filter" "$file" | rewrite "$file"
+  rewrite "$file" json_with_key "$filter" "$file" || return 1
   chmod 600 "$file"
+}
+
+# The key goes to jq through its environment, which ps does not show.
+json_with_key() {
+  CE_AUTH="Bearer $CE_KEY" jq --arg name "$SERVER_NAME" --arg url "$(mcp_url)" "$1" "$2"
 }
 
 # json_has <file> <key>: the file has our server under that key.
@@ -112,8 +117,8 @@ json_has() {
 # leaves it empty.
 json_del() {
   json_has "$1" "$2" || return 0
-  jq --arg n "$SERVER_NAME" --arg k "$2" 'del(.[$k][$n]) | if .[$k] == {} then del(.[$k]) else . end' "$1" |
-    rewrite "$1"
+  rewrite "$1" jq --arg n "$SERVER_NAME" --arg k "$2" \
+    'del(.[$k][$n]) | if .[$k] == {} then del(.[$k]) else . end' "$1"
 }
 
 # https://opencode.ai/docs/mcp-servers/: mcp.<name> = {type: "remote", url, headers, enabled}.
@@ -248,22 +253,34 @@ agents_connect() {
   return $failed
 }
 
-# Only what ce connected. Before v0.2.0 nothing was remembered, so with no
-# record at all every installed agent is taken to be ours, as it was then.
+# v0.1.0 kept no record of what it connected. A signed-in computer with no
+# record is a v0.1.0 install: the agents connected then are ce's.
+adopt_v01() {
+  [[ -f $CONFIG_FILE && ! -f $STATE_FILE ]] || return 0
+  local agent
+  for agent in "${AGENTS[@]}"; do
+    agent_installed "$agent" && "${agent}_connected" && remember "agent $agent"
+  done
+  return 0
+}
+
+# With no names: what ce connected, including agents since uninstalled, whose
+# config files still hold the key (Claude Code's goes with Claude Code).
+# A name given on the command line is disconnected whoever added it.
 agents_disconnect() {
   local agent
   while read -r agent; do
     [[ -n $agent ]] || continue
     valid_agent "$agent" || continue
-    agent_installed "$agent" || continue
-    if [[ -f $STATE_FILE ]] && ! remembered "agent $agent"; then
-      (($#)) && echo "  $agent: its $SERVER_NAME server was not added by ce, left as it is"
+    if [[ $agent == claude ]] && ! agent_installed claude; then
+      forget "agent claude"
       continue
     fi
+    (($#)) || remembered "agent $agent" || continue
     "${agent}_disconnect" </dev/null || true
     forget "agent $agent"
     echo "  $agent: disconnected"
-  done < <(pick_agents "$@")
+  done < <((($#)) && printf '%s\n' "$@" || printf '%s\n' "${AGENTS[@]}")
 }
 
 agents_agents() {
