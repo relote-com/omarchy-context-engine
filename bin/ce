@@ -21,11 +21,14 @@ SERVER_NAME="context-engine"
 # is uname -n). Every write from ce carries it as a machine:<name> tag, so an
 # engine shared by several machines can say which one saved what.
 MACHINE_TAG="machine:$HOSTNAME"
-# jq: the machine a found memory came from, or null.
-JQ_MACHINE='def machine: [(.fields.tags // [])[] | select(startswith("machine:")) | ltrimstr("machine:")] | first;'
+# jq: the machine a found memory came from, or null; a memory's id across
+# engines; a list of details joined into one line, empty ones left out.
+JQ_DEFS='def machine: [(.fields.tags // [])[] | select(startswith("machine:")) | ltrimstr("machine:")] | first;
+  def id: "\(.engine.slug)/\(.ref)";
+  def meta: map(select(. != null and . != "")) | join(" · ");'
 
-VERSION=$(jq -r '.version' "$CE_DIR/manifest.json" 2>/dev/null || echo dev)
-PLUGIN_ID=$(jq -r '.id' "$CE_DIR/manifest.json" 2>/dev/null || echo relote.context-engine)
+{ read -r VERSION && read -r PLUGIN_ID; } < <(jq -r '.version, .id' "$CE_DIR/manifest.json" 2>/dev/null) || true
+VERSION=${VERSION:-dev} PLUGIN_ID=${PLUGIN_ID:-relote.context-engine}
 
 CE_HOST="${CE_HOST:-}"
 CE_KEY="${CE_KEY:-}"
@@ -156,9 +159,15 @@ save_config() {
     printf 'CE_HOST=%s\nCE_KEY=%s\nCE_ENGINE=%s\n' "$CE_HOST" "$CE_KEY" "$CE_ENGINE" >"$CONFIG_FILE"
   )
   chmod 600 "$CONFIG_FILE"
+  refresh_bar
 }
 
-# The bar icon reads ce status on a long timer; after a sign-in or sign-out
+remove_config() {
+  rm -f "$CONFIG_FILE"
+  refresh_bar
+}
+
+# The bar icon reads ce status on a long timer; whenever the config changes
 # its IPC handler is told at once. -q: no shell running, or no widget, is fine.
 refresh_bar() {
   command -v omarchy-shell >/dev/null || return 0
@@ -256,15 +265,13 @@ EOF
 
   CE_ENGINE=$engine
   save_config
-  refresh_bar
   echo "Signed in. Engines this key reaches:"
   jq -r '.[] | "  \(.slug)\t\(.name)\t(\(.access // "?"))"' <<<"$engines"
   [[ -n $CE_ENGINE ]] && echo "Saving to: $CE_ENGINE"
 }
 
 cmd_logout() {
-  rm -f "$CONFIG_FILE"
-  refresh_bar
+  remove_config
   echo "Signed out. Claude Code stops reaching the engine now; other agents keep their own copy until: ce disconnect"
 }
 
@@ -319,9 +326,12 @@ cmd_brief() {
     jq '.data' <<<"$brief"
     return
   fi
+  if [[ $format == text ]]; then
+    jq -r '.text' <<<"$brief"
+  fi
   machines=$(machines_of_changes "$brief")
   if [[ $format == summary ]]; then
-    jq -r --argjson machines "$machines" '.data as $d
+    jq -r --argjson machines "$machines" "$JQ_DEFS"'.data as $d
       | (if $d.since then "Changed since you last looked (\($d.since[0:10])):"
          else "Most recent (no earlier visit on record):" end),
         (if ($d.changed // []) == [] then "  Nothing new." else empty end),
@@ -329,17 +339,15 @@ cmd_brief() {
           "• \(.title // .ref)",
           "  " + ([.type, (.engine.name // .engine.slug), (.updated // "")[0:10],
                    (.change | select(.person) | "\(.act) by \(.person)"),
-                   ($machines["\(.engine.slug)/\(.ref)"] | select(.) | "from \(.)")]
-                  | map(select(. != null and . != "")) | join(" · "))),
+                   ($machines[id] | select(.) | "from \(.)")] | meta)),
         (if ($d.omitted // 0) > 0 then "", "…and \($d.omitted) more." else empty end),
         (($d.unanswered // [])[] | "", "\(.name) did not answer."),
         ($d.usage // empty | "", .)
     ' <<<"$brief"
     return
   fi
-  jq -r '.text' <<<"$brief"
-  jq -r --argjson machines "$machines" '
-    [.data.changed[]? | {ref, machine: $machines["\(.engine.slug)/\(.ref)"]} | select(.machine)]
+  jq -r --argjson machines "$machines" "$JQ_DEFS"'
+    [.data.changed[]? | {ref, machine: $machines[id]} | select(.machine)]
     | if length > 0 then "\nFrom which machine:", (.[] | "  \(.ref)  ←  \(.machine)") else empty end
   ' <<<"$brief"
 }
@@ -349,13 +357,13 @@ cmd_brief() {
 # recent memories' machine: tags.
 machines_of_changes() {
   local changed recent
-  changed=$(jq -c '[.data.changed[]? | "\(.engine.slug)/\(.ref)"]' <<<"$1")
+  changed=$(jq -c "$JQ_DEFS"'[.data.changed[]? | id]' <<<"$1")
   if [[ $changed == '[]' ]] || ! recent=$(tool find '{"limit": 50}' 2>/dev/null); then
     echo '{}'
     return
   fi
-  jq -c --argjson changed "$changed" "$JQ_MACHINE"'
-    [.data.hits[]? | {key: "\(.engine.slug)/\(.ref)", value: machine}
+  jq -c --argjson changed "$changed" "$JQ_DEFS"'
+    [.data.hits[]? | {key: id, value: machine}
       | select(.value) | select(.key as $id | $changed | index($id))]
     | from_entries
   ' <<<"$recent"
@@ -390,13 +398,13 @@ cmd_find() {
     # For the overlay, in Qt's StyledText (the HTML subset whose links take
     # the theme's colour): a linked title, where it lives, the start of the
     # body. Engine text is escaped, and only an http(s) url becomes a link.
-    jq -r "$JQ_MACHINE"'
+    jq -r "$JQ_DEFS"'
       def esc: gsub("&"; "&amp;") | gsub("<"; "&lt;") | gsub(">"; "&gt;") | gsub("\""; "&quot;");
       .data.hits // [] | if length == 0 then "Nothing found." else map(
         ((.title // .ref // "") | esc) as $title
         | "<b>" + (if (.url // "") | test("^https?://") then "<a href=\"\(.url | esc)\">\($title)</a>" else $title end) + "</b><br>"
           + "<i>" + ([.type, (.engine.name // .engine.slug), (.updated_at // "")[0:10], (machine | select(.) | "machine:" + .)]
-              | map(select(. != null and . != "")) | join(" · ") | esc) + "</i><br>"
+              | meta | esc) + "</i><br>"
           + ((.body // "") | gsub("\\s+"; " ") | .[0:220] | esc)
       ) | join("<br><br>") end' <<<"$result"
   else

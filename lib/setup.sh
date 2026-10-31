@@ -257,13 +257,12 @@ setup_uninstall() {
   fi
   if [[ -f $STATE_FILE ]]; then
     restore_modes
-    rm -f "$CONFIG_FILE"
+    remove_config
     local state
     state=$(cat "$STATE_FILE")
     rm "$STATE_FILE"
     remove_made "$state"
   fi
-  refresh_bar
   echo "Removed from agents, skills, menu, keys and hooks."
   [[ -f $CONFIG_FILE ]] && echo "Your key stays in $CONFIG_FILE until: ce logout"
   echo "Remove the plugin itself with: omarchy plugin remove $PLUGIN_ID"

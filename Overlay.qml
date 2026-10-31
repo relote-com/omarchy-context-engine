@@ -170,8 +170,9 @@ Item {
         root.error = note || "The engine did not answer."
         return
       }
-      // A note on a success says why, above the result.
-      root.result = (note ? "<i>" + root.escaped(note) + "</i><br><br>" : "") + (out || "Nothing found.")
+      // A note on a success says why, above the result, in the result's format.
+      if (note) note = root.mode === "find" ? "<i>" + root.escaped(note) + "</i><br><br>" : note + "\n\n"
+      root.result = note + out
     }
   }
 
@@ -342,9 +343,8 @@ Item {
                   ? "Saving to " + (root.engine || "your engine")
                   : root.status === "unreachable" ? "Context Engine did not answer this key"
                   : root.status === "not-signed-in" ? "Not connected" : "")
-                + (root.mode === "remember"
-                   ? "   ·   Enter save   ·   Shift+Enter new line   ·   Esc close"
-                   : "   ·   Tab switch   ·   Enter run   ·   Esc close")
+                + (root.mode === "remember" ? "   ·   Enter save   ·   Shift+Enter new line" : "   ·   Tab switch   ·   Enter run")
+                + "   ·   Esc close"
           color: root.foreground
           opacity: 0.45
           elide: Text.ElideRight
