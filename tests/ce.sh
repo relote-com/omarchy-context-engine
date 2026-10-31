@@ -2,8 +2,8 @@
 
 # tests/ce.sh — bin/ce and lib/*.sh against stubs, in a throwaway HOME.
 #
-# No engine and no agents are needed: curl, claude and uname are stubbed, and
-# the other agents only have to be on PATH. Checks the machine stamp on writes
+# No engine and no agents are needed: curl and claude are stubbed, HOSTNAME is
+# set, and the other agents only have to be on PATH. Checks the machine stamp on writes
 # and in ce brief, that the key never reaches a command line, each agent's
 # config format, that a config ce did not write is left alone, and that
 # ce uninstall leaves HOME exactly as ce setup found it.
@@ -80,11 +80,6 @@ add-json)
 esac
 EOF
 
-cat >"$STUBS/uname" <<EOF
-#!/bin/bash
-echo "$MACHINE"
-EOF
-
 for agent in codex opencode hermes gemini; do
   printf '#!/bin/bash\nexit 0\n' >"$STUBS/$agent"
 done
@@ -109,7 +104,7 @@ new_home() {
   export HOME="$WORK/$1"
   mkdir -p "$HOME"
   unset XDG_CONFIG_HOME CODEX_HOME CLAUDE_CONFIG_DIR CE_HOST CE_KEY CE_ENGINE
-  export PATH="$STUBS:$ORIGINAL_PATH" CE_TEST_LOG="$LOG" CE_TEST_REPLIES="$WORK/replies"
+  export PATH="$STUBS:$ORIGINAL_PATH" CE_TEST_LOG="$LOG" CE_TEST_REPLIES="$WORK/replies" HOSTNAME="$MACHINE"
 }
 ORIGINAL_PATH=$PATH
 

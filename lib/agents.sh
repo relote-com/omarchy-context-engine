@@ -56,15 +56,13 @@ CODEX_END="# <<< context-engine"
 # Our block between its markers, and an unmarked table of that name (v0.1.0
 # wrote one), which is only ever stripped once the person agreed to replace it.
 codex_strip() {
-  [[ -f $CODEX_CONFIG ]] || return 0
-  awk -v b="$CODEX_BEGIN" -v e="$CODEX_END" -v header="[mcp_servers.$SERVER_NAME]" '
-    $0 == b { marked = 1; next }
-    $0 == e { marked = 0; next }
-    marked { next }
+  strip_block "$CODEX_CONFIG" "$CODEX_BEGIN" "$CODEX_END"
+  codex_connected || return 0
+  awk -v header="[mcp_servers.$SERVER_NAME]" '
     $0 == header { skip = 1; next }
     skip && /^\[/ { skip = 0 }
     !skip
-  ' "$CODEX_CONFIG" >"$CODEX_CONFIG.tmp" && cat "$CODEX_CONFIG.tmp" >"$CODEX_CONFIG" && rm "$CODEX_CONFIG.tmp"
+  ' "$CODEX_CONFIG" | rewrite "$CODEX_CONFIG"
 }
 
 codex_connected() { grep -qxF "[mcp_servers.$SERVER_NAME]" "$CODEX_CONFIG" 2>/dev/null; }
@@ -73,7 +71,7 @@ codex_connect() {
   new_file "$CODEX_CONFIG"
   keep_mode "$CODEX_CONFIG"
   codex_strip
-  [[ -s $CODEX_CONFIG && $(tail -c1 "$CODEX_CONFIG") != "" ]] && echo >>"$CODEX_CONFIG"
+  end_line "$CODEX_CONFIG"
   cat >>"$CODEX_CONFIG" <<EOF
 $CODEX_BEGIN
 [mcp_servers.$SERVER_NAME]
@@ -101,24 +99,27 @@ json_set() {
     return 1
   fi
   keep_mode "$file"
-  CE_AUTH="Bearer $CE_KEY" jq --arg name "$SERVER_NAME" --arg url "$(mcp_url)" \
-    "$filter" "$file" >"$file.tmp" && cat "$file.tmp" >"$file" && rm "$file.tmp"
+  CE_AUTH="Bearer $CE_KEY" jq --arg name "$SERVER_NAME" --arg url "$(mcp_url)" "$filter" "$file" | rewrite "$file"
   chmod 600 "$file"
 }
 
-# json_del <file> <path>: drop our server, and the object holding it if that
+# json_has <file> <key>: the file has our server under that key.
+json_has() {
+  jq -e --arg n "$SERVER_NAME" --arg k "$2" '.[$k][$n]' "$1" >/dev/null 2>&1
+}
+
+# json_del <file> <key>: drop our server, and the object holding it if that
 # leaves it empty.
 json_del() {
-  local file=$1 key=$2
-  jq -e --arg n "$SERVER_NAME" --arg k "$key" '.[$k][$n]' "$file" >/dev/null 2>&1 || return 0
-  jq --arg n "$SERVER_NAME" --arg k "$key" 'del(.[$k][$n]) | if .[$k] == {} then del(.[$k]) else . end' \
-    "$file" >"$file.tmp" && cat "$file.tmp" >"$file" && rm "$file.tmp"
+  json_has "$1" "$2" || return 0
+  jq --arg n "$SERVER_NAME" --arg k "$2" 'del(.[$k][$n]) | if .[$k] == {} then del(.[$k]) else . end' "$1" |
+    rewrite "$1"
 }
 
 # https://opencode.ai/docs/mcp-servers/: mcp.<name> = {type: "remote", url, headers, enabled}.
 OPENCODE_CONFIG="${XDG_CONFIG_HOME:-$HOME/.config}/opencode/opencode.json"
 
-opencode_connected() { jq -e --arg n "$SERVER_NAME" '.mcp[$n]' "$OPENCODE_CONFIG" >/dev/null 2>&1; }
+opencode_connected() { json_has "$OPENCODE_CONFIG" mcp; }
 
 opencode_connect() {
   json_set "$OPENCODE_CONFIG" \
@@ -130,7 +131,7 @@ opencode_disconnect() { json_del "$OPENCODE_CONFIG" mcp; }
 # https://cursor.com/docs/context/mcp: ~/.cursor/mcp.json, mcpServers.<name> = {url, headers}.
 CURSOR_CONFIG="$HOME/.cursor/mcp.json"
 
-cursor_connected() { jq -e --arg n "$SERVER_NAME" '.mcpServers[$n]' "$CURSOR_CONFIG" >/dev/null 2>&1; }
+cursor_connected() { json_has "$CURSOR_CONFIG" mcpServers; }
 
 cursor_connect() {
   json_set "$CURSOR_CONFIG" '.mcpServers[$name] = {url: $url, headers: {Authorization: env.CE_AUTH}}'
@@ -144,7 +145,7 @@ cursor_disconnect() { json_del "$CURSOR_CONFIG" mcpServers; }
 # `gemini mcp add -H` would put the key on its command line.
 GEMINI_CONFIG="$HOME/.gemini/settings.json"
 
-gemini_connected() { jq -e --arg n "$SERVER_NAME" '.mcpServers[$n]' "$GEMINI_CONFIG" >/dev/null 2>&1; }
+gemini_connected() { json_has "$GEMINI_CONFIG" mcpServers; }
 
 gemini_connect() {
   json_set "$GEMINI_CONFIG" '.mcpServers[$name] = {httpUrl: $url, headers: {Authorization: env.CE_AUTH}}'
@@ -163,14 +164,7 @@ HERMES_CONFIG="$HOME/.hermes/config.yaml"
 HERMES_BEGIN="# >>> context-engine (managed by ce; edit with ce connect/disconnect)"
 HERMES_END="# <<< context-engine"
 
-hermes_strip() {
-  [[ -f $HERMES_CONFIG ]] || return 0
-  awk -v b="$HERMES_BEGIN" -v e="$HERMES_END" '
-    $0 == b { skip = 1; next }
-    $0 == e { skip = 0; next }
-    !skip
-  ' "$HERMES_CONFIG" >"$HERMES_CONFIG.tmp" && cat "$HERMES_CONFIG.tmp" >"$HERMES_CONFIG" && rm "$HERMES_CONFIG.tmp"
-}
+hermes_strip() { strip_block "$HERMES_CONFIG" "$HERMES_BEGIN" "$HERMES_END"; }
 
 hermes_connected() { grep -qxF "$HERMES_BEGIN" "$HERMES_CONFIG" 2>/dev/null; }
 
@@ -188,7 +182,7 @@ EOF
   fi
   new_file "$HERMES_CONFIG"
   keep_mode "$HERMES_CONFIG"
-  [[ -s $HERMES_CONFIG && $(tail -c1 "$HERMES_CONFIG") != "" ]] && echo >>"$HERMES_CONFIG"
+  end_line "$HERMES_CONFIG"
   cat >>"$HERMES_CONFIG" <<EOF
 $HERMES_BEGIN
 mcp_servers:
@@ -226,14 +220,14 @@ valid_agent() {
 # did not add and the person does not want it replaced.
 connect_agent() {
   local agent=$1
-  if "${agent}_connected" && ! remembered "agent $agent"; then
-    if ! ask "$agent already has its own $SERVER_NAME server. Replace it with this computer's key?"; then
-      echo "  $agent: already has its own $SERVER_NAME server, left as it is"
-      return 0
-    fi
+  if "${agent}_connected" && ! remembered "agent $agent" &&
+    ! ask "$agent already has its own $SERVER_NAME server. Replace it with this computer's key?"; then
+    echo "  $agent: already has its own $SERVER_NAME server, left as it is"
+    return 0
   fi
   "${agent}_connect" </dev/null || return 1
   remember "agent $agent"
+  echo "  $agent: connected"
 }
 
 agents_connect() {
@@ -246,9 +240,7 @@ agents_connect() {
       echo "  $agent: not installed, skipped"
       continue
     fi
-    if connect_agent "$agent"; then
-      remembered "agent $agent" && echo "  $agent: connected"
-    else
+    if ! connect_agent "$agent"; then
       echo "  $agent: needs a hand (see above)"
       failed=1
     fi
@@ -269,8 +261,7 @@ agents_disconnect() {
       continue
     fi
     "${agent}_disconnect" </dev/null || true
-    [[ -f $STATE_FILE ]] && grep -vxF "agent $agent" "$STATE_FILE" >"$STATE_FILE.tmp" && cat "$STATE_FILE.tmp" >"$STATE_FILE"
-    rm -f "$STATE_FILE.tmp"
+    forget "agent $agent"
     echo "  $agent: disconnected"
   done < <(pick_agents "$@")
 }

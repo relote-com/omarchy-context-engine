@@ -44,7 +44,7 @@ link_bin() {
     echo "  $BIN_LINK is something else; left as it is (run $CE_DIR/bin/ce directly)"
     return 0
   fi
-  new_file "$BIN_LINK"
+  mkdirs "$(dirname "$BIN_LINK")"
   ln -sfn "$CE_DIR/bin/ce" "$BIN_LINK"
   echo "  ce → $BIN_LINK"
   [[ :$PATH: == *":$HOME/.local/bin:"* ]] || echo "  (add ~/.local/bin to PATH to type ce anywhere)"
@@ -59,7 +59,7 @@ install_skill() {
       echo "  $dir/context-engine is another skill; left as it is"
       continue
     fi
-    new_file "$dir/context-engine"
+    mkdirs "$dir"
     ln -sfn "$SKILL_SRC" "$dir/context-engine"
     echo "  skill → $dir/context-engine"
   done
@@ -100,18 +100,11 @@ EOF
   CE_MENU_BLOCK=$block awk '
     !done && /^[[:space:]]*\{[[:space:]]*$/ { print; print ENVIRON["CE_MENU_BLOCK"]; done = 1; next }
     { print }
-  ' "$MENU_FILE" >"$MENU_FILE.tmp" && cat "$MENU_FILE.tmp" >"$MENU_FILE" && rm "$MENU_FILE.tmp"
+  ' "$MENU_FILE" | rewrite "$MENU_FILE"
   echo "  menu → Omarchy menu › Context Engine"
 }
 
-remove_menu() {
-  [[ -f $MENU_FILE ]] || return 0
-  awk -v b="$MENU_BEGIN" -v e="$MENU_END" '
-    $0 == b { skip = 1; next }
-    $0 == e { skip = 0; next }
-    !skip
-  ' "$MENU_FILE" >"$MENU_FILE.tmp" && cat "$MENU_FILE.tmp" >"$MENU_FILE" && rm "$MENU_FILE.tmp"
-}
+remove_menu() { strip_block "$MENU_FILE" "$MENU_BEGIN" "$MENU_END"; }
 
 install_keys() {
   if [[ -e $HYPR_FILE ]] && ! ce_wrote "$HYPR_FILE"; then
@@ -126,8 +119,9 @@ o.bind("SUPER + ALT + M", "Context Engine: remember", "omarchy-shell shell toggl
 EOF
   # One line at the end, removed again by ce uninstall.
   if [[ -f $HYPR_MAIN ]] && ! grep -qF 'require("hypr.context_engine")' "$HYPR_MAIN"; then
-    [[ -s $HYPR_MAIN && $(tail -c1 "$HYPR_MAIN") != "" ]] && echo >>"$HYPR_MAIN"
+    end_line "$HYPR_MAIN"
     printf '%s\n' "$HYPR_REQUIRE" >>"$HYPR_MAIN"
+    remember "line $HYPR_MAIN"
   fi
   if command -v hyprctl >/dev/null && [[ -n ${HYPRLAND_INSTANCE_SIGNATURE:-} ]]; then
     hyprctl reload >/dev/null 2>&1 || true
@@ -139,8 +133,9 @@ EOF
 }
 
 remove_keys() {
-  [[ -f $HYPR_MAIN ]] && grep -qxF "$HYPR_REQUIRE" "$HYPR_MAIN" &&
-    grep -vxF "$HYPR_REQUIRE" "$HYPR_MAIN" >"$HYPR_MAIN.tmp" && cat "$HYPR_MAIN.tmp" >"$HYPR_MAIN" && rm "$HYPR_MAIN.tmp"
+  if remembered "line $HYPR_MAIN" && [[ -f $HYPR_MAIN ]]; then
+    { grep -vxF "$HYPR_REQUIRE" "$HYPR_MAIN" || true; } | rewrite "$HYPR_MAIN"
+  fi
   ce_wrote "$HYPR_FILE" && rm "$HYPR_FILE"
   return 0
 }
@@ -224,9 +219,7 @@ EOF
 remove_made() {
   local path
   while read -r path; do
-    if [[ -L $path ]]; then
-      continue
-    elif [[ -d $path ]]; then
+    if [[ -d $path ]]; then
       rmdir "$path" 2>/dev/null || true
     elif [[ -f $path ]] && [[ ! -s $path || $(tr -d '[:space:]' <"$path") == "{}" ]]; then
       rm "$path"

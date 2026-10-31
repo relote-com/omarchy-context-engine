@@ -14,14 +14,17 @@ CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/context-engine"
 CONFIG_FILE="$CONFIG_DIR/config"
 # What ce wrote outside the plugin folder, one line each, so ce uninstall can
 # undo exactly that: "made <path>" (did not exist before), "mode <path> <octal>"
-# (permissions before ce tightened them), "agent <name>", "plugin enabled".
+# (permissions before ce tightened them), "line <file>" (ce appended its line),
+# "agent <name>", "plugin enabled".
 STATE_FILE="$CONFIG_DIR/installed"
 SERVER_NAME="context-engine"
-# Which computer a write came from, as the system names it. Every write from ce
-# carries it as a machine:<name> tag, so an engine shared by several machines
-# can say which one saved what.
-MACHINE=$(uname -n)
-MACHINE_TAG="machine:$MACHINE"
+# Which computer a write came from, as the system names it (bash's $HOSTNAME
+# is uname -n). Every write from ce carries it as a machine:<name> tag, so an
+# engine shared by several machines can say which one saved what.
+MACHINE_TAG="machine:$HOSTNAME"
+# jq: the machine a found memory came from, or null.
+JQ_MACHINE='def machine: [(.fields.tags // [])[] | select(startswith("machine:")) | ltrimstr("machine:")] | first;'
+
 VERSION=$(jq -r '.version' "$CE_DIR/manifest.json" 2>/dev/null || echo dev)
 
 CE_HOST="${CE_HOST:-}"
@@ -46,18 +49,46 @@ ask() {
   gum confirm "$question"
 }
 
+# rewrite <file>: replace the file's content with stdin, keeping its inode
+# and mode. The whole of stdin is read before the file is touched.
+rewrite() {
+  cat >"$1.tmp" && cat "$1.tmp" >"$1"
+  rm -f "$1.tmp"
+}
+
+# end_line <file>: before appending, make sure the last line is ended.
+end_line() {
+  [[ -s $1 && $(tail -c1 "$1") != "" ]] && echo >>"$1"
+  return 0
+}
+
+# strip_block <file> <begin> <end>: drop the lines between two markers, markers included.
+strip_block() {
+  [[ -f $1 ]] || return 0
+  awk -v b="$2" -v e="$3" '
+    $0 == b { skip = 1; next }
+    $0 == e { skip = 0; next }
+    !skip
+  ' "$1" | rewrite "$1"
+}
+
+remembered() {
+  grep -qxF "$1" "$STATE_FILE" 2>/dev/null
+}
+
 # remember <line>: note something ce wrote, once.
 remember() {
   [[ -d $CONFIG_DIR ]] || mkdirs "$CONFIG_DIR"
-  grep -qxF "$1" "$STATE_FILE" 2>/dev/null && return 0
+  remembered "$1" && return 0
   (
     umask 077
     printf '%s\n' "$1" >>"$STATE_FILE"
   )
 }
 
-remembered() {
-  grep -qxF "$1" "$STATE_FILE" 2>/dev/null
+forget() {
+  [[ -f $STATE_FILE ]] || return 0
+  { grep -vxF "$1" "$STATE_FILE" || true; } | rewrite "$STATE_FILE"
 }
 
 # mkdir -p that remembers each directory it had to make, outermost first.
@@ -82,7 +113,8 @@ new_file() {
 # Before ce tightens a file's permissions: what they were, once.
 keep_mode() {
   [[ -e $1 ]] || return 0
-  grep -q "^mode $1 " "$STATE_FILE" 2>/dev/null || remember "mode $1 $(stat -c %a "$1")"
+  awk -v p="mode $1 " 'index($0, p) == 1 { found = 1 } END { exit !found }' "$STATE_FILE" 2>/dev/null ||
+    remember "mode $1 $(stat -c %a "$1")"
 }
 
 # The config is KEY=value lines, read rather than sourced so a stray line can
@@ -265,10 +297,9 @@ cmd_brief() {
   changed=$(jq -c '[.data.changed[]? | "\(.engine.slug)/\(.ref)"]' <<<"$brief")
   [[ $changed != '[]' ]] || return 0
   recent=$(tool find '{"limit": 50}' 2>/dev/null) || return 0
-  jq -r --argjson changed "$changed" '
+  jq -r --argjson changed "$changed" "$JQ_MACHINE"'
     [.data.hits[]? | select(("\(.engine.slug)/\(.ref)") as $id | $changed | index($id))
-      | {ref, machine: ([(.fields.tags // [])[] | select(startswith("machine:")) | ltrimstr("machine:")] | first)}
-      | select(.machine)]
+      | {ref, machine: machine} | select(.machine)]
     | if length > 0 then "\nFrom which machine:", (.[] | "  \(.ref)  ←  \(.machine)") else empty end
   ' <<<"$recent"
 }
@@ -300,10 +331,10 @@ cmd_find() {
     jq '.data' <<<"$result"
   elif $markdown; then
     # For the overlay: a linked title, where it lives, and the start of the body.
-    jq -r '.data.hits // [] | if length == 0 then "Nothing found." else .[] |
+    jq -r "$JQ_MACHINE"'.data.hits // [] | if length == 0 then "Nothing found." else .[] |
       "**[\(.title)](\(.url // ""))**  \n" +
       "_\(.type) · \(.engine.name // .engine.slug // "") · \((.updated_at // "")[0:10])" +
-      ([(.fields.tags // [])[] | select(startswith("machine:")) | " · " + .] | first // "") + "_  \n" +
+      (machine | if . then " · machine:" + . else "" end) + "_  \n" +
       ((.body // "") | gsub("\\s+"; " ") | .[0:220]) + "\n"
       end' <<<"$result"
   else
@@ -409,7 +440,7 @@ cmd_ensure_agent() {
   agent=$(omarchy-default-agent 2>/dev/null || true)
   [[ -n $agent ]] || return 0
   valid_agent "$agent" && agent_installed "$agent" || return 0
-  "${agent}_connected" || connect_agent "$agent"
+  "${agent}_connected" || { "${agent}_connect" </dev/null && remember "agent $agent"; }
 }
 
 # For agents that ask for headers when they connect (Claude Code's
