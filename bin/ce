@@ -402,13 +402,13 @@ cmd_find() {
     # character outside a URL's safe set ('"' and "'" among them) is
     # percent-encoded there instead.
     jq -r "$JQ_DEFS"'
-      def esc: tostring | gsub("[\u0000-\u001f\u007f]"; " ") | gsub("&"; "&amp;") | gsub("<"; "&lt;") | gsub(">"; "&gt;") | gsub("\""; "&quot;");
+      def esc: tostring | gsub("[\u0000-\u001f\u007f-\u009f\u2028\u2029\u202a-\u202e\u2066-\u2069]"; " ") | gsub("&"; "&amp;") | gsub("<"; "&lt;") | gsub(">"; "&gt;") | gsub("\""; "&quot;");
       def href: gsub("(?<c>[^A-Za-z0-9._~:/?#\\[\\]@!$&()*+,;=%-])"; .c | @uri);
       .data.hits // [] | if length == 0 then "Nothing found." else map(
         ((.title // .ref // "") | esc) as $title
         | ((.url // "") | tostring) as $url
-        | "<b>" + (if $url | test("^https?://"; "i") then "<a href=\"\($url | href)\">\($title)</a>" else $title end) + "</b><br>"
-          + "<i>" + ([.type, (.engine.name // .engine.slug), ((.updated_at // "") | tostring)[0:10], (machine | select(.) | "machine:" + .)]
+        | "<b>" + (if $url | ascii_downcase | test("^https?://") then "<a href=\"\($url | href)\">\($title)</a>" else $title end) + "</b><br>"
+          + "<i>" + ([.type, (.engine.name // .engine.slug), ((.updated_at // "") | if type == "number" then todate else tostring end)[0:10], (machine | select(.) | "machine:" + .)]
               | meta | esc) + "</i><br>"
           + ((.body // "") | tostring | gsub("\\s+"; " ") | .[0:220] | esc)
       ) | join("<br><br>") end' <<<"$result"

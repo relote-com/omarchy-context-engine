@@ -116,6 +116,8 @@ cat >"$WORK/replies/find.json" <<'EOF'
   {"ref": "note::older", "type": "note", "title": "Older <draft>", "url": "file:///etc/passwd", "engine": {"slug": "omarchy", "name": "Omarchy"},
    "fields": {"tags": ["machine:desk"]}},
   {"ref": "note::trap", "type": "note", "title": "Trap", "url": "https://x.test/'href='file:///tmp/a.desktop", "engine": {"slug": "omarchy", "name": "Omarchy"}},
+  {"ref": "note::upper", "type": "note", "title": "Upper", "url": "HTTPS://x.test/Up", "engine": {"slug": "omarchy", "name": "Omarchy"}},
+  {"ref": "note::fold", "type": "note", "title": "Fold", "url": "http\u017f://x.test/", "engine": {"slug": "omarchy", "name": "Omarchy"}},
   {"ref": "note::odd", "type": "note", "title": "Cut\u0000here", "url": 7, "updated_at": 1730000000, "body": 42, "engine": {"slug": "omarchy", "name": "Omarchy"}}]}}
 EOF
 
@@ -172,11 +174,13 @@ check "the overlay's find results show the machine, in italics" grep -qF "· mac
 check "the overlay's find results keep a link's url readable (StyledText reads href raw)" \
   grep -qF '<a href="https://engine.test/n?a=1&b=2%20x%09%22y">' <<<"$styled"
 check "the overlay's find results escape engine text and link only http(s)" \
-  bash -c 'grep -qF "<b>Older &lt;draft&gt;</b>" <<<"$1" && ! grep -qE "href=\"[^h]" <<<"$1"' _ "$styled"
+  bash -c 'grep -qF "<b>Older &lt;draft&gt;</b>" <<<"$1" && ! grep -oE "href=[^>]*" <<<"$1" | grep -qviE "^href=\"https?://"' _ "$styled"
+check "the scheme test ignores ASCII case only" \
+  bash -c 'grep -qF "<a href=\"HTTPS://x.test/Up\">Upper</a>" <<<"$1" && grep -qF "<b>Fold</b>" <<<"$1"' _ "$styled"
 check "an engine url cannot end the href early with a quote of either kind" \
   grep -qF '<a href="https://x.test/%27href=%27file:///tmp/a.desktop">Trap</a>' <<<"$styled"
 check "a NUL or a number from the engine cannot cut the results short" \
-  bash -c 'grep -qF "<b>Cut here</b>" <<<"$1" && grep -qF "<br>42" <<<"$1"' _ "$styled"
+  bash -c 'grep -qF "<b>Cut here</b>" <<<"$1" && grep -qF "· 2024-10-27</i><br>42" <<<"$1"' _ "$styled"
 check "ce brief is still the engine's brief, as agents read it" grep -qF "NEVER STORE" <<<"$brief"
 
 summary=$("$CE" brief --summary)
