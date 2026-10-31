@@ -39,6 +39,7 @@ Item {
   property string engine: ""
   property bool busy: false
   property string result: ""
+  property string query: ""           // Find/Ask's text while Remember is open
   property string draft: ""           // Remember's text while another mode is open
   property string error: ""
 
@@ -57,14 +58,19 @@ Item {
     var nextMode = root.modes.indexOf(payload.mode) >= 0 ? payload.mode : "find"
     var reopenSame = root.opened && nextMode === root.mode
 
-    root.mode = nextMode
-    root.opened = true
-    if (!reopenSame) {
+    if (root.opened) {
+      // Summoned while open: like a Tab, so neither text is lost.
+      if (!reopenSame) root.setMode(nextMode)
+    } else {
+      root.mode = nextMode
       root.result = ""
       root.error = ""
+      root.query = ""
       root.draft = ""
-      input.text = payload.text || ""
+      input.text = ""
     }
+    if (payload.text) input.text = payload.text
+    root.opened = true
     statusProc.running = true
     if (root.mode === "brief" && !root.result) root.run()
     Qt.callLater(function() { input.forceActiveFocus() })
@@ -89,11 +95,13 @@ Item {
   }
 
   function setMode(next) {
-    // A query carries into Ask as the start of a question, but Remember keeps
-    // its own draft: Find's query is not a title, and a note survives a Tab
-    // away and back.
-    if (root.mode === "remember") root.draft = input.text
-    if (next === "remember" && root.mode !== "remember") input.text = root.draft
+    // A query carries from Find into Ask as the start of a question, but
+    // Remember keeps its own text: a query is not a title, a note is not a
+    // query, and each survives a Tab away and back.
+    if ((root.mode === "remember") !== (next === "remember")) {
+      if (next === "remember") { root.query = input.text; input.text = root.draft }
+      else { root.draft = input.text; input.text = root.query }
+    }
     root.mode = next
     root.result = ""
     root.error = ""
@@ -116,7 +124,6 @@ Item {
       // reports the outcome as a notification either way.
       Util.execArgv([root.ce, "remember", "--quiet", "--notify", text])
       input.text = ""
-      root.draft = ""
       root.dismiss()
       return
     }
