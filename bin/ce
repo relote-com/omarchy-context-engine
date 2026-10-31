@@ -403,7 +403,7 @@ cmd_find() {
     # percent-encoded there instead.
     jq -r "$JQ_DEFS"'
       def esc: gsub("&"; "&amp;") | gsub("<"; "&lt;") | gsub(">"; "&gt;") | gsub("\""; "&quot;");
-      def href: [explode[] | [.] | implode | if test("^[A-Za-z0-9._~:/?#\\[\\]@!$&()*+,;=%-]$") then . else @uri end] | add;
+      def href: gsub("(?<c>[^A-Za-z0-9._~:/?#\\[\\]@!$&()*+,;=%-])"; .c | @uri);
       .data.hits // [] | if length == 0 then "Nothing found." else map(
         ((.title // .ref // "") | esc) as $title
         | "<b>" + (if (.url // "") | test("^https?://") then "<a href=\"\(.url | href)\">\($title)</a>" else $title end) + "</b><br>"

@@ -42,6 +42,9 @@ Item {
   property string query: ""           // the other modes' text while Remember is open
   property string draft: ""           // Remember's text while another mode is open
   property string error: ""
+  // How the result was written: only ce find --styled escapes engine text
+  // for StyledText, so the format goes with the command, not the mode.
+  property bool styled: false
 
   property color background: Color.menu.background
   property color foreground: Color.menu.text
@@ -142,6 +145,7 @@ Item {
     var args = root.mode === "find" ? ["find", "--styled", "--limit", "10"].concat(text ? [text] : [])
              : ["brief", "--summary"]
     root.busy = true
+    root.styled = root.mode === "find"
     root.error = ""
     root.result = ""
     runProc.command = [root.ce].concat(args)
@@ -180,7 +184,7 @@ Item {
         return
       }
       // A note on a success says why, above the result, in the result's format.
-      if (note) note = root.mode === "find" ? "<i>" + root.escaped(note) + "</i><br><br>" : note + "\n\n"
+      if (note) note = root.styled ? "<i>" + root.escaped(note) + "</i><br><br>" : note + "\n\n"
       root.result = note + out
     }
   }
@@ -339,7 +343,7 @@ Item {
             id: resultText
             width: results.width
             wrapMode: Text.Wrap
-            textFormat: root.error || root.busy || root.mode === "brief" ? Text.PlainText : Text.StyledText
+            textFormat: root.styled && !root.error && !root.busy ? Text.StyledText : Text.PlainText
             text: root.busy ? "Looking…"
                 : root.error ? root.error
                 : root.result

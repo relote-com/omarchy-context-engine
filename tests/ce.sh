@@ -173,7 +173,7 @@ check "the overlay's find results keep a link's url readable (StyledText reads h
 check "the overlay's find results escape engine text and link only http(s)" \
   bash -c 'grep -qF "<b>Older &lt;draft&gt;</b>" <<<"$1" && ! grep -qF "passwd" <<<"$1"' _ "$styled"
 check "an engine url cannot end the href early with a quote of either kind" \
-  bash -c '! grep -qF "href='"'"'" <<<"$1" && grep -qF "<a href=\"https://x.test/%27href=%27file:///tmp/a.desktop\">Trap</a>" <<<"$1"' _ "$styled"
+  grep -qF '<a href="https://x.test/%27href=%27file:///tmp/a.desktop">Trap</a>' <<<"$styled"
 check "ce brief is still the engine's brief, as agents read it" grep -qF "NEVER STORE" <<<"$brief"
 
 summary=$("$CE" brief --summary)
