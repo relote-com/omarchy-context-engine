@@ -68,6 +68,10 @@ Item {
     Qt.callLater(function() { input.forceActiveFocus() })
   }
 
+  function escaped(text) {
+    return String(text).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+  }
+
   function close() {
     root.opened = false
   }
@@ -126,7 +130,7 @@ Item {
     }
     if (runProc.running) return
 
-    var args = root.mode === "find" ? ["find", "--markdown", "--limit", "10"].concat(text ? [text] : [])
+    var args = root.mode === "find" ? ["find", "--styled", "--limit", "10"].concat(text ? [text] : [])
              : ["brief", "--summary"]
     root.busy = true
     root.error = ""
@@ -167,7 +171,7 @@ Item {
         return
       }
       // A note on a success says why, above the result.
-      root.result = (note ? "*" + note + "*\n\n" : "") + (out || "Nothing found.")
+      root.result = (note ? "<i>" + root.escaped(note) + "</i><br><br>" : "") + (out || "Nothing found.")
     }
   }
 
@@ -303,7 +307,8 @@ Item {
           }
         }
 
-        // Results: the engine's own rendering, which is Markdown for a reader.
+        // Results: ce's rendering, StyledText for find (MarkdownText would
+        // paint links in Qt's own blue whatever linkColor says).
         Flickable {
           id: results
           visible: root.busy || root.result !== "" || root.error !== ""
@@ -318,7 +323,7 @@ Item {
             id: resultText
             width: results.width
             wrapMode: Text.Wrap
-            textFormat: root.error || root.busy || root.mode === "brief" ? Text.PlainText : Text.MarkdownText
+            textFormat: root.error || root.busy || root.mode === "brief" ? Text.PlainText : Text.StyledText
             text: root.busy ? "Looking…"
                 : root.error ? root.error
                 : root.result

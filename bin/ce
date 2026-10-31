@@ -362,12 +362,12 @@ machines_of_changes() {
 }
 
 cmd_find() {
-  local json=false markdown=false limit=8 engine="" types=()
+  local json=false styled=false limit=8 engine="" types=()
   local words=()
   while (($#)); do
     case "$1" in
     --json) json=true; shift ;;
-    --markdown) markdown=true; shift ;;
+    --styled) styled=true; shift ;;
     --limit|-n) limit=${2:?}; shift 2 ;;
     --engine|-e) engine=${2:?}; shift 2 ;;
     --type|-t) types+=("${2:?}"); shift 2 ;;
@@ -386,14 +386,19 @@ cmd_find() {
   result=$(tool find "$body")
   if $json; then
     jq '.data' <<<"$result"
-  elif $markdown; then
-    # For the overlay: a linked title, where it lives, and the start of the body.
-    jq -r "$JQ_MACHINE"'.data.hits // [] | if length == 0 then "Nothing found." else .[] |
-      "**[\(.title)](\(.url // ""))**  \n" +
-      "*\(.type) · \(.engine.name // .engine.slug // "") · \((.updated_at // "")[0:10])" +
-      (machine | if . then " · machine:" + . else "" end) + "*  \n" +
-      ((.body // "") | gsub("\\s+"; " ") | .[0:220]) + "\n"
-      end' <<<"$result"
+  elif $styled; then
+    # For the overlay, in Qt's StyledText (the HTML subset whose links take
+    # the theme's colour): a linked title, where it lives, the start of the
+    # body. Engine text is escaped, and only an http(s) url becomes a link.
+    jq -r "$JQ_MACHINE"'
+      def esc: gsub("&"; "&amp;") | gsub("<"; "&lt;") | gsub(">"; "&gt;") | gsub("\""; "&quot;");
+      .data.hits // [] | if length == 0 then "Nothing found." else map(
+        ((.title // .ref // "") | esc) as $title
+        | "<b>" + (if (.url // "") | test("^https?://") then "<a href=\"\(.url | esc)\">\($title)</a>" else $title end) + "</b><br>"
+          + "<i>" + ([.type, (.engine.name // .engine.slug), (.updated_at // "")[0:10], (machine | select(.) | "machine:" + .)]
+              | map(select(. != null and . != "")) | join(" · ") | esc) + "</i><br>"
+          + ((.body // "") | gsub("\\s+"; " ") | .[0:220] | esc)
+      ) | join("<br><br>") end' <<<"$result"
   else
     jq -r '.text' <<<"$result"
   fi

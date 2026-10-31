@@ -113,7 +113,7 @@ cat >"$WORK/replies/find.json" <<'EOF'
 {"text": "1 hit", "data": {"hits": [
   {"ref": "note::gaps", "type": "note", "title": "Gaps are 5", "engine": {"slug": "omarchy", "name": "Omarchy"},
    "fields": {"tags": ["omarchy", "machine:air-13"]}},
-  {"ref": "note::older", "type": "note", "title": "Older", "engine": {"slug": "omarchy", "name": "Omarchy"},
+  {"ref": "note::older", "type": "note", "title": "Older <draft>", "url": "file:///etc/passwd", "engine": {"slug": "omarchy", "name": "Omarchy"},
    "fields": {"tags": ["machine:desk"]}}]}}
 EOF
 
@@ -165,8 +165,10 @@ check "ce brief shows which machine saved a change" \
   grep -qF "note::gaps  ←  air-13" <<<"$brief"
 check "ce brief lists only what changed" \
   bash -c '! grep -qF "note::older" <<<"$1"' _ "$brief"
-check "the overlay's find results show the machine, in italics (_ underlines in Qt)" \
-  bash -c '"$1" find --markdown gaps | grep -qF "· machine:air-13*"' _ "$CE"
+styled=$("$CE" find --styled gaps)
+check "the overlay's find results show the machine, in italics" grep -qF "· machine:air-13</i>" <<<"$styled"
+check "the overlay's find results escape engine text and link only http(s)" \
+  bash -c 'grep -qF "<b>Older &lt;draft&gt;</b>" <<<"$1" && ! grep -qF "file:" <<<"$1"' _ "$styled"
 check "ce brief is still the engine's brief, as agents read it" grep -qF "NEVER STORE" <<<"$brief"
 
 summary=$("$CE" brief --summary)
