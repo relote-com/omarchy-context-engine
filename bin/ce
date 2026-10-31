@@ -408,7 +408,7 @@ cmd_find() {
         ((.title // .ref // "") | esc) as $title
         | ((.url // "") | tostring) as $url
         | "<b>" + (if $url | ascii_downcase | test("^https?://") then "<a href=\"\($url | href)\">\($title)</a>" else $title end) + "</b><br>"
-          + "<i>" + ([.type, (.engine.name // .engine.slug), ((.updated_at // "") | if type == "number" then todate else tostring end)[0:10], (machine | select(.) | "machine:" + .)]
+          + "<i>" + ([.type, (.engine.name // .engine.slug), ((.updated_at // "") | tostring)[0:10], (machine | select(.) | "machine:" + .)]
               | meta | esc) + "</i><br>"
           + ((.body // "") | tostring | gsub("\\s+"; " ") | .[0:220] | esc)
       ) | join("<br><br>") end' <<<"$result"

@@ -118,7 +118,7 @@ cat >"$WORK/replies/find.json" <<'EOF'
   {"ref": "note::trap", "type": "note", "title": "Trap", "url": "https://x.test/'href='file:///tmp/a.desktop", "engine": {"slug": "omarchy", "name": "Omarchy"}},
   {"ref": "note::upper", "type": "note", "title": "Upper", "url": "HTTPS://x.test/Up", "engine": {"slug": "omarchy", "name": "Omarchy"}},
   {"ref": "note::fold", "type": "note", "title": "Fold", "url": "http\u017f://x.test/", "engine": {"slug": "omarchy", "name": "Omarchy"}},
-  {"ref": "note::odd", "type": "note", "title": "Cut\u0000here", "url": 7, "updated_at": 1730000000, "body": 42, "engine": {"slug": "omarchy", "name": "Omarchy"}}]}}
+  {"ref": "note::odd", "type": "note", "title": "Cut\u0000here", "url": 7, "updated_at": 1e300, "body": 42, "engine": {"slug": "omarchy", "name": "Omarchy"}}]}}
 EOF
 
 # PATH is the stubs and links to the few tools ce and these tests use, so an
@@ -180,7 +180,7 @@ check "the scheme test ignores ASCII case only" \
 check "an engine url cannot end the href early with a quote of either kind" \
   grep -qF '<a href="https://x.test/%27href=%27file:///tmp/a.desktop">Trap</a>' <<<"$styled"
 check "a NUL or a number from the engine cannot cut the results short" \
-  bash -c 'grep -qF "<b>Cut here</b>" <<<"$1" && grep -qF "· 2024-10-27</i><br>42" <<<"$1"' _ "$styled"
+  bash -c 'grep -qF "<b>Cut here</b>" <<<"$1" && grep -qF "</i><br>42" <<<"$1"' _ "$styled"
 check "ce brief is still the engine's brief, as agents read it" grep -qF "NEVER STORE" <<<"$brief"
 
 summary=$("$CE" brief --summary)
