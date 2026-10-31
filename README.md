@@ -1,6 +1,6 @@
 # Context Engine for Omarchy
 
-One memory for every agent on your Omarchy machines. Version 0.2.0.
+One memory for every agent on your Omarchy machines. Version 0.2.1.
 
 Omarchy can launch Claude Code, Codex, OpenCode, Hermes and more from one
 keybinding, and each of them normally starts from nothing. This plugin
@@ -23,6 +23,10 @@ find/remember box on a hotkey, and entries in the Omarchy menu.
 omarchy plugin add https://github.com/relote-com/omarchy-context-engine.git --enable
 ~/.config/omarchy/plugins/relote.context-engine/bin/ce setup
 ```
+
+Both ask before they change anything. From a script, with no terminal to
+ask in, add `--yes` to each: `omarchy plugin add … --enable --yes`, then
+`ce setup --yes <keyfile` with the key in a file.
 
 It needs `curl`, `jq` and `gum`, which Omarchy already ships, and uses
 `notify-send` and `xdg-open` when they are there. The agents it connects
@@ -80,14 +84,14 @@ From which machine:
 | Bar icon | Click to find, right-click to remember, middle-click for what changed |
 | `Super+Ctrl+M` | Find in memory (Tab switches to Remember, Ask, What changed) |
 | Ask (in the box or the menu) | Opens your default Omarchy agent with the question. The agent answers from the engine over MCP |
-| `Super+Alt+M` | Remember something. The first line is the title |
+| `Super+Alt+M` | Remember something. The first line is the title, Shift+Enter starts the next line, Enter saves |
 | Omarchy menu › Context Engine | Find, remember, what changed, connect agents, setup |
 | Any agent | Just ask: "what did we decide about the gaps?" The skill has it check the engine first |
 
 From a terminal:
 
 ```bash
-ce brief                                   # what changed since you last looked
+ce brief --summary                         # what changed since you last looked
 ce find "hyprland gaps"                    # search across your engines
 ce remember "Gaps are 5 on the Air" --decision --why "10 wasted space on a 13in screen"
 git log -1 --format=%B | ce remember --tag release

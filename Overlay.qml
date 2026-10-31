@@ -2,6 +2,7 @@ import Quickshell
 import Quickshell.Io
 import Quickshell.Wayland
 import QtQuick
+import QtQuick.Controls as Controls
 import qs.Commons
 import qs.Ui
 
@@ -10,7 +11,8 @@ import qs.Ui
 // (omarchy agent prompt), which reads the engine through its MCP server.
 // Summon with a mode:
 //   omarchy-shell shell summon relote.context-engine '{"mode":"find"}'
-// Tab cycles modes, Enter runs, Esc clears then closes. All engine traffic
+// Tab cycles modes, Enter runs (Shift+Enter starts a new line in Remember),
+// Esc clears then closes. All engine traffic
 // goes through bin/ce, so the overlay holds no key and speaks no HTTP itself.
 
 Item {
@@ -26,7 +28,7 @@ Item {
   readonly property var modeLabels: ({ find: "Find", remember: "Remember", ask: "Ask", brief: "What changed" })
   readonly property var placeholders: ({
     find: "Search your memory…",
-    remember: "Something worth keeping — first line is the title",
+    remember: "Something worth keeping — first line is the title, Shift+Enter for more",
     ask: "Ask your agent — it reads your engine…",
     brief: "Enter to load what changed since you last looked"
   })
@@ -41,6 +43,7 @@ Item {
 
   property color background: Color.menu.background
   property color foreground: Color.menu.text
+  property color accent: Color.menu.selectedText
   property color scrim: Color.menu.scrim
   property var borderSpec: Border.surfaceSpec("menu", "border", Color.menu.border, Math.max(1, Style.space(2)))
   readonly property int pad: Style.spacing.panelPadding
@@ -76,10 +79,17 @@ Item {
 
   function cycle(step) {
     var i = root.modes.indexOf(root.mode)
-    root.mode = root.modes[(i + step + root.modes.length) % root.modes.length]
+    root.setMode(root.modes[(i + step + root.modes.length) % root.modes.length])
+  }
+
+  function setMode(next) {
+    // A query carries into Ask as the start of a question; into Remember it
+    // would be saved as the start of the title.
+    if (next === "remember" && root.mode !== "remember") input.text = ""
+    root.mode = next
     root.result = ""
     root.error = ""
-    if (root.mode === "brief") root.run()
+    if (next === "brief") root.run()
   }
 
   function setup() {
@@ -117,7 +127,7 @@ Item {
     if (runProc.running) return
 
     var args = root.mode === "find" ? ["find", "--markdown", "--limit", "10"].concat(text ? [text] : [])
-             : ["brief"]
+             : ["brief", "--summary"]
     root.busy = true
     root.error = ""
     root.result = ""
@@ -157,7 +167,7 @@ Item {
         return
       }
       // A note on a success says why, above the result.
-      root.result = (note ? "_" + note + "_\n\n" : "") + (out || "Nothing found.")
+      root.result = (note ? "*" + note + "*\n\n" : "") + (out || "Nothing found.")
     }
   }
 
@@ -237,10 +247,7 @@ Item {
               MouseArea {
                 anchors.fill: parent
                 onClicked: {
-                  root.mode = modelData
-                  root.result = ""
-                  root.error = ""
-                  if (modelData === "brief") root.run()
+                  root.setMode(modelData)
                   input.forceActiveFocus()
                 }
               }
@@ -248,11 +255,28 @@ Item {
           }
         }
 
-        TextField {
+        // Multi-line, for Remember's title and body. Styled like the kit's
+        // TextField, which only comes single-line.
+        Controls.TextArea {
           id: input
+          readonly property var borderSpec: Border.controlSpec(activeFocus ? "focus" : (hovered ? "hover-cursor" : "normal"), root.foreground, Color.accent)
           width: parent.width
-          foreground: root.foreground
+          wrapMode: TextEdit.Wrap
+          color: root.foreground
+          selectionColor: Style.selectionFillFor(root.foreground, Color.accent)
+          selectedTextColor: root.foreground
+          placeholderTextColor: Qt.darker(root.foreground, 1.6)
+          font.family: Style.font.family
           font.pixelSize: Style.font.heading
+          leftPadding: Style.spacing.controlPaddingX + Border.left(borderSpec)
+          rightPadding: Style.spacing.controlPaddingX + Border.right(borderSpec)
+          topPadding: Style.spacing.inputPaddingY + Border.top(borderSpec)
+          bottomPadding: Style.spacing.inputPaddingY + Border.bottom(borderSpec)
+          background: BorderSurface {
+            color: Style.controlFill(input.activeFocus, input.hovered, root.foreground, Color.accent)
+            borderSpec: input.borderSpec
+            radius: Style.cornerRadius
+          }
           placeholderText: root.status === "not-signed-in"
             ? "Not connected — press Enter to set up Context Engine"
             : root.placeholders[root.mode]
@@ -268,7 +292,12 @@ Item {
               root.cycle(event.key === Qt.Key_Backtab || (event.modifiers & Qt.ShiftModifier) ? -1 : 1)
               event.accepted = true
             } else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
-              root.run()
+              if (root.mode === "remember" && (event.modifiers & Qt.ShiftModifier)) {
+                if (input.selectedText) input.remove(input.selectionStart, input.selectionEnd)
+                input.insert(input.cursorPosition, "\n")
+              } else {
+                root.run()
+              }
               event.accepted = true
             }
           }
@@ -294,6 +323,7 @@ Item {
                 : root.error ? root.error
                 : root.result
             color: root.foreground
+            linkColor: root.accent
             opacity: root.busy ? 0.6 : 1
             font.family: Style.font.family
             font.pixelSize: Style.font.body
@@ -307,7 +337,9 @@ Item {
                   ? "Saving to " + (root.engine || "your engine")
                   : root.status === "unreachable" ? "Context Engine did not answer this key"
                   : root.status === "not-signed-in" ? "Not connected" : "")
-                + "   ·   Tab switch   ·   Enter run   ·   Esc close"
+                + (root.mode === "remember"
+                   ? "   ·   Enter save   ·   Shift+Enter new line   ·   Esc close"
+                   : "   ·   Tab switch   ·   Enter run   ·   Esc close")
           color: root.foreground
           opacity: 0.45
           elide: Text.ElideRight

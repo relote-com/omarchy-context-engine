@@ -80,6 +80,22 @@ add-json)
 esac
 EOF
 
+# omarchy-shell: logs each IPC call, as the running shell would receive it.
+cat >"$STUBS/omarchy-shell" <<'EOF'
+#!/bin/bash
+printf '%s\n' "$*" >>"$CE_TEST_LOG/shell"
+EOF
+
+# gum: says which prompts were shown; the key prompt is answered with $CE_TEST_KEY.
+cat >"$STUBS/gum" <<'EOF'
+#!/bin/bash
+printf '%s\n' "$1" >>"$CE_TEST_LOG/gum"
+[[ $1 == input ]] && printf '%s\n' "$CE_TEST_KEY"
+exit 0
+EOF
+
+printf '#!/bin/bash\necho "$*" >>"$CE_TEST_LOG/opened"\n' >"$STUBS/xdg-open"
+
 for agent in codex opencode hermes gemini; do
   printf '#!/bin/bash\nexit 0\n' >"$STUBS/$agent"
 done
@@ -87,9 +103,11 @@ chmod +x "$STUBS"/*
 
 mkdir -p "$WORK/replies"
 cat >"$WORK/replies/brief.json" <<'EOF'
-{"text": "# Brief\n\n1 change in Omarchy", "data": {
+{"text": "# Brief\n\n1 change in Omarchy\n\nNEVER STORE\nSecrets", "data": {
   "engines": [{"slug": "omarchy", "name": "Omarchy", "access": "write"}],
-  "changed": [{"engine": {"slug": "omarchy", "name": "Omarchy"}, "ref": "note::gaps", "type": "note", "title": "Gaps are 5"}]}}
+  "since": "2026-10-30T09:00:00Z", "omitted": 2, "unanswered": [{"slug": "work", "name": "Work"}],
+  "changed": [{"engine": {"slug": "omarchy", "name": "Omarchy"}, "ref": "note::gaps", "type": "note", "title": "Gaps are 5",
+    "updated": "2026-10-31T08:00:00Z", "change": {"act": "edited", "person": "Ada"}}]}}
 EOF
 cat >"$WORK/replies/find.json" <<'EOF'
 {"text": "1 hit", "data": {"hits": [
@@ -104,7 +122,7 @@ EOF
 TOOLS="$WORK/tools"
 mkdir -p "$TOOLS"
 for tool in awk bash cat chmod cmp cp cut date diff dirname find grep head jq ln mkdir mktemp mv \
-  readlink rm rmdir sed sha256sum sort stat tac tail tr wc; do
+  readlink rm rmdir script sed sha256sum sort stat tac tail tr wc; do
   ln -s "$(command -v "$tool")" "$TOOLS/$tool" || fail "missing tool: $tool"
 done
 
@@ -113,7 +131,7 @@ new_home() {
   export HOME="$WORK/$1"
   mkdir -p "$HOME"
   unset XDG_CONFIG_HOME CODEX_HOME CLAUDE_CONFIG_DIR CE_HOST CE_KEY CE_ENGINE
-  export PATH="$STUBS:$TOOLS" CE_TEST_LOG="$LOG" CE_TEST_REPLIES="$WORK/replies" HOSTNAME="$MACHINE"
+  export PATH="$STUBS:$TOOLS" CE_TEST_LOG="$LOG" CE_TEST_REPLIES="$WORK/replies" CE_TEST_KEY="$KEY" HOSTNAME="$MACHINE"
 }
 
 login() {
@@ -147,8 +165,25 @@ check "ce brief shows which machine saved a change" \
   grep -qF "note::gaps  ←  air-13" <<<"$brief"
 check "ce brief lists only what changed" \
   bash -c '! grep -qF "note::older" <<<"$1"' _ "$brief"
-check "the overlay's find results show the machine" \
-  bash -c '"$1" find --markdown gaps | grep -qF "· machine:air-13_"' _ "$CE"
+check "the overlay's find results show the machine, in italics (_ underlines in Qt)" \
+  bash -c '"$1" find --markdown gaps | grep -qF "· machine:air-13*"' _ "$CE"
+check "ce brief is still the engine's brief, as agents read it" grep -qF "NEVER STORE" <<<"$brief"
+
+summary=$("$CE" brief --summary)
+check "ce brief --summary lists each change for a person" \
+  grep -qxF "  note · Omarchy · 2026-10-31 · edited by Ada · from air-13" <<<"$summary"
+check "ce brief --summary says since when, what was left out and who did not answer" \
+  bash -c 'grep -qF "since you last looked (2026-10-30)" <<<"$1" && grep -qF "and 2 more" <<<"$1" && grep -qF "Work did not answer" <<<"$1"' _ "$summary"
+check "ce brief --summary leaves out the agents' instructions" \
+  bash -c '! grep -qE "NEVER STORE|# Brief" <<<"$1"' _ "$summary"
+
+# --- the bar icon hears about sign-in and sign-out -------------------------
+
+check "ce login refreshes the bar icon" grep -qxF -- "-q relote.context-engine refresh" "$LOG/shell"
+: >"$LOG/shell"
+"$CE" logout >/dev/null
+check "ce logout refreshes the bar icon" grep -qxF -- "-q relote.context-engine refresh" "$LOG/shell"
+login
 
 # --- the key stays off command lines ---------------------------------------
 
@@ -207,8 +242,19 @@ mv "$WORK/claude.away" "$STUBS/claude"
 after=$(tree_of)
 check "claude: the server is gone again" \
   jq -e --arg n "$server" '.mcpServers | has($n) | not' "$HOME/.claude.json"
+check "ce uninstall refreshes the bar icon" grep -qxF -- "-q relote.context-engine refresh" "$LOG/shell"
 check "ce uninstall leaves HOME exactly as before ce setup" test "$before" = "$after"
 [[ $before == "$after" ]] || diff <(echo "$before") <(echo "$after")
+
+# --- setup --yes in a terminal: the key prompt is the only question ---------
+
+new_home terminal
+: >"$LOG/gum"
+script -qec "$CE setup --yes" /dev/null >"$LOG/setup-terminal" 2>&1 || fail "ce setup --yes in a terminal exited $?"
+check "ce setup --yes signs in from the key prompt" grep -qF "CE_KEY=$KEY" "$HOME/.config/context-engine/config"
+check "ce setup --yes asks nothing else, not even to open the browser" \
+  bash -c '[[ $(cat "$1") == input ]]' _ "$LOG/gum"
+"$CE" uninstall >/dev/null 2>&1
 
 # --- setup without consent: configs the person already has -------------------
 

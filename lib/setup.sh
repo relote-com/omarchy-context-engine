@@ -6,7 +6,6 @@
 # not ce's (another `ce` on PATH, a skill of the same name) is left alone.
 # Re-running setup is safe.
 
-PLUGIN_ID=$(jq -r '.id' "$CE_DIR/manifest.json")
 BIN_LINK="$HOME/.local/bin/ce"
 # What the menu and the hook run: the plugin's own ce, whatever else is on PATH.
 CE_BIN="$CE_DIR/bin/ce"
@@ -264,6 +263,7 @@ setup_uninstall() {
     rm "$STATE_FILE"
     remove_made "$state"
   fi
+  refresh_bar
   echo "Removed from agents, skills, menu, keys and hooks."
   [[ -f $CONFIG_FILE ]] && echo "Your key stays in $CONFIG_FILE until: ce logout"
   echo "Remove the plugin itself with: omarchy plugin remove $PLUGIN_ID"

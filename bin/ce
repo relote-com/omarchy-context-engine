@@ -25,6 +25,7 @@ MACHINE_TAG="machine:$HOSTNAME"
 JQ_MACHINE='def machine: [(.fields.tags // [])[] | select(startswith("machine:")) | ltrimstr("machine:")] | first;'
 
 VERSION=$(jq -r '.version' "$CE_DIR/manifest.json" 2>/dev/null || echo dev)
+PLUGIN_ID=$(jq -r '.id' "$CE_DIR/manifest.json" 2>/dev/null || echo relote.context-engine)
 
 CE_HOST="${CE_HOST:-}"
 CE_KEY="${CE_KEY:-}"
@@ -157,6 +158,13 @@ save_config() {
   chmod 600 "$CONFIG_FILE"
 }
 
+# The bar icon reads ce status on a long timer; after a sign-in or sign-out
+# its IPC handler is told at once. -q: no shell running, or no widget, is fine.
+refresh_bar() {
+  command -v omarchy-shell >/dev/null || return 0
+  omarchy-shell -q "$PLUGIN_ID" refresh >/dev/null 2>&1 </dev/null || true
+}
+
 require_key() {
   [[ -n $CE_KEY ]] || die "not signed in. Run: ce login"
 }
@@ -220,7 +228,7 @@ Context Engine needs a key for this computer.
   3. Paste the key (it starts with ce_) below.
 
 EOF
-    if command -v xdg-open >/dev/null && gum confirm "Open $CE_HOST in your browser?"; then
+    if command -v xdg-open >/dev/null && ask "Open $CE_HOST in your browser?"; then
       xdg-open "$CE_HOST/agents" >/dev/null 2>&1 &
     fi
     key=$(gum input --password --placeholder "ce_…" --prompt "Key: ") || die "cancelled"
@@ -248,6 +256,7 @@ EOF
 
   CE_ENGINE=$engine
   save_config
+  refresh_bar
   echo "Signed in. Engines this key reaches:"
   jq -r '.[] | "  \(.slug)\t\(.name)\t(\(.access // "?"))"' <<<"$engines"
   [[ -n $CE_ENGINE ]] && echo "Saving to: $CE_ENGINE"
@@ -255,6 +264,7 @@ EOF
 
 cmd_logout() {
   rm -f "$CONFIG_FILE"
+  refresh_bar
   echo "Signed out. Claude Code stops reaching the engine now; other agents keep their own copy until: ce disconnect"
 }
 
@@ -294,27 +304,60 @@ cmd_engine() {
   echo "Saving to: $CE_ENGINE"
 }
 
+# ce brief: the engine's brief as agents read it (the skill's fallback when
+# MCP is not there). ce brief --summary: what changed, for a person, from the
+# same data: no instructions, no rules for agents.
 cmd_brief() {
-  local json=false
-  [[ ${1:-} == --json ]] && json=true
-  local brief
+  local format=text
+  case ${1:-} in
+  --json) format=json ;;
+  --summary) format=summary ;;
+  esac
+  local brief machines
   brief=$(tool brief)
-  if $json; then
+  if [[ $format == json ]]; then
     jq '.data' <<<"$brief"
     return
   fi
+  machines=$(machines_of_changes "$brief")
+  if [[ $format == summary ]]; then
+    jq -r --argjson machines "$machines" '.data as $d
+      | (if $d.since then "Changed since you last looked (\($d.since[0:10])):"
+         else "Most recent (no earlier visit on record):" end),
+        (if ($d.changed // []) == [] then "  Nothing new." else empty end),
+        ($d.changed[]? | "",
+          "• \(.title // .ref)",
+          "  " + ([.type, (.engine.name // .engine.slug), (.updated // "")[0:10],
+                   (.change | select(.person) | "\(.act) by \(.person)"),
+                   ($machines["\(.engine.slug)/\(.ref)"] | select(.) | "from \(.)")]
+                  | map(select(. != null and . != "")) | join(" · "))),
+        (if ($d.omitted // 0) > 0 then "", "…and \($d.omitted) more." else empty end),
+        (($d.unanswered // [])[] | "", "\(.name) did not answer."),
+        ($d.usage // empty | "", .)
+    ' <<<"$brief"
+    return
+  fi
   jq -r '.text' <<<"$brief"
-
-  # The brief lists changes without their tags, so which machine saved each
-  # one is read back from the most recent memories' machine: tags.
-  local changed recent
-  changed=$(jq -c '[.data.changed[]? | "\(.engine.slug)/\(.ref)"]' <<<"$brief")
-  [[ $changed != '[]' ]] || return 0
-  recent=$(tool find '{"limit": 50}' 2>/dev/null) || return 0
-  jq -r --argjson changed "$changed" "$JQ_MACHINE"'
-    [.data.hits[]? | select(("\(.engine.slug)/\(.ref)") as $id | $changed | index($id))
-      | {ref, machine: machine} | select(.machine)]
+  jq -r --argjson machines "$machines" '
+    [.data.changed[]? | {ref, machine: $machines["\(.engine.slug)/\(.ref)"]} | select(.machine)]
     | if length > 0 then "\nFrom which machine:", (.[] | "  \(.ref)  ←  \(.machine)") else empty end
+  ' <<<"$brief"
+}
+
+# machines_of_changes <brief>: {"engine/ref": machine} for the changes it
+# lists. The brief carries no tags, so they are read back from the most
+# recent memories' machine: tags.
+machines_of_changes() {
+  local changed recent
+  changed=$(jq -c '[.data.changed[]? | "\(.engine.slug)/\(.ref)"]' <<<"$1")
+  if [[ $changed == '[]' ]] || ! recent=$(tool find '{"limit": 50}' 2>/dev/null); then
+    echo '{}'
+    return
+  fi
+  jq -c --argjson changed "$changed" "$JQ_MACHINE"'
+    [.data.hits[]? | {key: "\(.engine.slug)/\(.ref)", value: machine}
+      | select(.value) | select(.key as $id | $changed | index($id))]
+    | from_entries
   ' <<<"$recent"
 }
 
@@ -347,8 +390,8 @@ cmd_find() {
     # For the overlay: a linked title, where it lives, and the start of the body.
     jq -r "$JQ_MACHINE"'.data.hits // [] | if length == 0 then "Nothing found." else .[] |
       "**[\(.title)](\(.url // ""))**  \n" +
-      "_\(.type) · \(.engine.name // .engine.slug // "") · \((.updated_at // "")[0:10])" +
-      (machine | if . then " · machine:" + . else "" end) + "_  \n" +
+      "*\(.type) · \(.engine.name // .engine.slug // "") · \((.updated_at // "")[0:10])" +
+      (machine | if . then " · machine:" + . else "" end) + "*  \n" +
       ((.body // "") | gsub("\\s+"; " ") | .[0:220]) + "\n"
       end' <<<"$result"
   else
@@ -486,7 +529,7 @@ Usage: ce <command> [args]
   status [--short]      Is this computer connected, and to what
   engine [slug]         Show or set the engine new memories go to
 
-  brief [--json]        What changed since you last looked
+  brief [--summary]     What changed since you last looked (--json: raw)
   find [query]          Search memory (no query: most recent)
   get <type::slug>      Open one memory
   remember [text]       Save a note (stdin works; --decision --why, --task, --tag)
