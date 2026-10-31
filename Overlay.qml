@@ -365,6 +365,8 @@ Item {
                   : root.status === "not-signed-in" ? "Not connected" : "")
                 + (root.mode === "remember" ? "   ·   Enter save   ·   Shift+Enter new line" : "   ·   Tab switch   ·   Enter run")
                 + "   ·   Esc close"
+          // The engine's slug is the engine's text: never parsed as markup.
+          textFormat: Text.PlainText
           color: root.foreground
           opacity: 0.45
           elide: Text.ElideRight
