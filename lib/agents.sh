@@ -284,7 +284,7 @@ adopt_v01() {
 # config files still hold the key.
 # A name given on the command line is disconnected whoever added it.
 agents_disconnect() {
-  local agent
+  local agent failed=0
   while read -r agent; do
     [[ -n $agent ]] || continue
     valid_agent "$agent" || continue
@@ -294,8 +294,10 @@ agents_disconnect() {
       echo "  $agent: disconnected"
     else
       echo "  $agent: still connected, needs a hand (see above)"
+      failed=1
     fi
   done < <((($#)) && printf '%s\n' "$@" || printf '%s\n' "${AGENTS[@]}")
+  return $failed
 }
 
 agents_agents() {

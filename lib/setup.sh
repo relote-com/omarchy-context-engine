@@ -240,7 +240,8 @@ restore_modes() {
 }
 
 setup_uninstall() {
-  agents_disconnect
+  local stuck=0
+  agents_disconnect || stuck=1
   remove_skill
   remove_menu
   remove_keys
@@ -248,6 +249,12 @@ setup_uninstall() {
   ours "$BIN_LINK" "$CE_DIR/bin/ce" && rm "$BIN_LINK"
   if remembered "plugin enabled" && command -v omarchy-plugin-disable >/dev/null; then
     omarchy-plugin-disable "$PLUGIN_ID" >/dev/null 2>&1 || true
+  fi
+  # An agent still holding the key keeps the record and the key file, so the
+  # next ce uninstall can finish the job once it is fixed by hand.
+  if ((stuck)); then
+    echo "Some agents still have the key (see above). Fix those, then run ce uninstall again."
+    return 1
   fi
   if [[ -f $STATE_FILE ]]; then
     restore_modes

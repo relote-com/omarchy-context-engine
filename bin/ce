@@ -51,15 +51,14 @@ ask() {
 # rewrite <file> <command…>: replace the file's content with what the command
 # prints, keeping its inode and mode. If the command fails, the file is left
 # as it was. The staging file is private (mktemp makes it 0600), since the
-# content may hold the key.
+# content may hold the key; an interrupt leaves it behind rather than risk
+# deleting the only whole copy while the file is being written.
 rewrite() {
   local file=$1 tmp status=0
   shift
   tmp=$(mktemp "$file.XXXXXX") || return 1
-  trap 'rm -f "$tmp"; exit 130' INT TERM
   "$@" >"$tmp" && cat "$tmp" >"$file" || status=1
   rm -f "$tmp"
-  trap - INT TERM
   return $status
 }
 

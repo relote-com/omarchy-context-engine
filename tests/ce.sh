@@ -268,6 +268,10 @@ sed -i '1a // my comment' "$HOME/.cursor/mcp.json"
 check "disconnect says it could not remove the server" grep -qF "cursor: still connected" "$LOG/disconnect-commented"
 check "and keeps its record, so uninstall can try again" \
   grep -qxF "agent cursor" "$HOME/.config/context-engine/installed"
+"$CE" uninstall >"$LOG/uninstall-commented" 2>&1
+check "uninstall fails while an agent still holds the key" test $? -ne 0
+check "and keeps the record and the key file for the next try" \
+  test -f "$HOME/.config/context-engine/installed" -a -f "$HOME/.config/context-engine/config"
 
 # --- a v0.1.0 install: signed in, nothing recorded ---------------------------
 
