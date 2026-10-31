@@ -12,7 +12,16 @@ set -euo pipefail
 CE_DIR=$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)
 CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/context-engine"
 CONFIG_FILE="$CONFIG_DIR/config"
+# What ce wrote outside the plugin folder, one line each, so ce uninstall can
+# undo exactly that: "made <path>" (did not exist before), "mode <path> <octal>"
+# (permissions before ce tightened them), "agent <name>", "plugin enabled".
+STATE_FILE="$CONFIG_DIR/installed"
 SERVER_NAME="context-engine"
+# Which computer a write came from, as the system names it. Every write from ce
+# carries it as a machine:<name> tag, so an engine shared by several machines
+# can say which one saved what.
+MACHINE=$(uname -n)
+MACHINE_TAG="machine:$MACHINE"
 VERSION=$(jq -r '.version' "$CE_DIR/manifest.json" 2>/dev/null || echo dev)
 
 CE_HOST="${CE_HOST:-}"
@@ -26,6 +35,54 @@ die() {
 
 interactive() {
   [[ -t 0 && -t 1 ]]
+}
+
+ASSUME_YES=${ASSUME_YES:-0}
+
+ask() {
+  local question=$1
+  ((ASSUME_YES)) && return 0
+  interactive || return 1
+  gum confirm "$question"
+}
+
+# remember <line>: note something ce wrote, once.
+remember() {
+  [[ -d $CONFIG_DIR ]] || mkdirs "$CONFIG_DIR"
+  grep -qxF "$1" "$STATE_FILE" 2>/dev/null && return 0
+  (
+    umask 077
+    printf '%s\n' "$1" >>"$STATE_FILE"
+  )
+}
+
+remembered() {
+  grep -qxF "$1" "$STATE_FILE" 2>/dev/null
+}
+
+# mkdir -p that remembers each directory it had to make, outermost first.
+mkdirs() {
+  local dir=$1 missing=()
+  while [[ ! -d $dir ]]; do
+    missing=("$dir" "${missing[@]}")
+    dir=$(dirname "$dir")
+  done
+  ((${#missing[@]})) || return 0
+  mkdir -p "$1"
+  [[ $1 == "$CONFIG_DIR" ]] && chmod 700 "$CONFIG_DIR"
+  for dir in "${missing[@]}"; do remember "made $dir"; done
+}
+
+# Before ce creates a file: its directory exists and the file is ours to remove.
+new_file() {
+  mkdirs "$(dirname "$1")"
+  [[ -e $1 ]] || remember "made $1"
+}
+
+# Before ce tightens a file's permissions: what they were, once.
+keep_mode() {
+  [[ -e $1 ]] || return 0
+  grep -q "^mode $1 " "$STATE_FILE" 2>/dev/null || remember "mode $1 $(stat -c %a "$1")"
 }
 
 # The config is KEY=value lines, read rather than sourced so a stray line can
@@ -46,12 +103,12 @@ load_config() {
 }
 
 save_config() {
-  mkdir -p "$CONFIG_DIR"
-  chmod 700 "$CONFIG_DIR"
+  new_file "$CONFIG_FILE"
   (
     umask 077
     printf 'CE_HOST=%s\nCE_KEY=%s\nCE_ENGINE=%s\n' "$CE_HOST" "$CE_KEY" "$CE_ENGINE" >"$CONFIG_FILE"
   )
+  chmod 600 "$CONFIG_FILE"
 }
 
 require_key() {
@@ -60,11 +117,13 @@ require_key() {
 
 # POST /tool/<name> with a JSON body. Prints the envelope {text, data, isError}
 # on success; on a refusal prints its text to stderr and fails.
+# The key reaches curl through a file descriptor, never its arguments, so ps
+# cannot show it.
 tool() {
   local name=$1 body=${2:-'{}'} response status
   require_key
   response=$(curl -sS --max-time 60 -X POST "$CE_HOST/tool/$name" \
-    -H "authorization: Bearer $CE_KEY" \
+    -H @<(printf 'authorization: Bearer %s\n' "$CE_KEY") \
     -H "content-type: application/json" \
     -H "user-agent: omarchy-context-engine/$VERSION" \
     --data-binary "$body" -w $'\n%{http_code}') || die "could not reach $CE_HOST"
@@ -100,8 +159,11 @@ cmd_login() {
 
   [[ -n $host ]] && CE_HOST=${host%/}
 
-  if [[ -z $key ]]; then
-    interactive || die "pass the key with --key, or run ce login in a terminal"
+  # A key piped in (ce login <keyfile) stays off the command line.
+  if [[ -z $key && ! -t 0 ]]; then
+    key=$(cat)
+  elif [[ -z $key ]]; then
+    interactive || die "pipe the key in (ce login <keyfile), or run ce login in a terminal"
     cat <<EOF
 
 Context Engine needs a key for this computer.
@@ -191,7 +253,24 @@ cmd_brief() {
   [[ ${1:-} == --json ]] && json=true
   local brief
   brief=$(tool brief)
-  $json && jq '.data' <<<"$brief" || jq -r '.text' <<<"$brief"
+  if $json; then
+    jq '.data' <<<"$brief"
+    return
+  fi
+  jq -r '.text' <<<"$brief"
+
+  # The brief lists changes without their tags, so which machine saved each
+  # one is read back from the most recent memories' machine: tags.
+  local changed recent
+  changed=$(jq -c '[.data.changed[]? | "\(.engine.slug)/\(.ref)"]' <<<"$brief")
+  [[ $changed != '[]' ]] || return 0
+  recent=$(tool find '{"limit": 50}' 2>/dev/null) || return 0
+  jq -r --argjson changed "$changed" '
+    [.data.hits[]? | select(("\(.engine.slug)/\(.ref)") as $id | $changed | index($id))
+      | {ref, machine: ([(.fields.tags // [])[] | select(startswith("machine:")) | ltrimstr("machine:")] | first)}
+      | select(.machine)]
+    | if length > 0 then "\nFrom which machine:", (.[] | "  \(.ref)  ←  \(.machine)") else empty end
+  ' <<<"$recent"
 }
 
 cmd_find() {
@@ -223,7 +302,8 @@ cmd_find() {
     # For the overlay: a linked title, where it lives, and the start of the body.
     jq -r '.data.hits // [] | if length == 0 then "Nothing found." else .[] |
       "**[\(.title)](\(.url // ""))**  \n" +
-      "_\(.type) · \(.engine.name // .engine.slug // "") · \((.updated_at // "")[0:10])_  \n" +
+      "_\(.type) · \(.engine.name // .engine.slug // "") · \((.updated_at // "")[0:10])" +
+      ([(.fields.tags // [])[] | select(startswith("machine:")) | " · " + .] | first // "") + "_  \n" +
       ((.body // "") | gsub("\\s+"; " ") | .[0:220]) + "\n"
       end' <<<"$result"
   else
@@ -286,9 +366,9 @@ cmd_remember() {
   local result
   payload() {
     jq -nc --arg engine "$engine" --arg type "$type" --arg title "$1" --arg body "$body" \
-      --arg why "$why" --arg idem "$idem" \
+      --arg why "$why" --arg idem "$idem" --arg machine "$MACHINE_TAG" \
       --args '{engine: $engine, type: $type, title: $title, body: $body, idem: $idem,
-        tags: (["omarchy"] + $ARGS.positional)}
+        tags: (["omarchy", $machine] + $ARGS.positional | unique)}
         + (if $why != "" then {fields: {rationale: $why}} else {} end)' \
       "${tags[@]}"
   }
@@ -329,7 +409,14 @@ cmd_ensure_agent() {
   agent=$(omarchy-default-agent 2>/dev/null || true)
   [[ -n $agent ]] || return 0
   valid_agent "$agent" && agent_installed "$agent" || return 0
-  "${agent}_connected" || "${agent}_connect" </dev/null
+  "${agent}_connected" || connect_agent "$agent"
+}
+
+# For agents that ask for headers when they connect (Claude Code's
+# headersHelper): the key stays in this computer's config, not in theirs.
+cmd_mcp_headers() {
+  require_key
+  CE_AUTH="Bearer $CE_KEY" jq -nc '{Authorization: env.CE_AUTH}'
 }
 
 cmd_tool() {
@@ -347,8 +434,9 @@ ce $VERSION — Context Engine on Omarchy
 
 Usage: ce <command> [args]
 
-  setup                 Sign in, connect agents, install the skill and menu
-  login [--key K]       Store a key for this computer
+  setup [--yes]         Sign in, connect agents, install the skill and menu
+  uninstall             Undo everything setup and connect wrote, key included
+  login [<keyfile]      Store a key for this computer (asks, or reads stdin)
   logout                Forget the key
   status [--short]      Is this computer connected, and to what
   engine [slug]         Show or set the engine new memories go to
@@ -384,6 +472,7 @@ main() {
   ensure-agent) cmd_ensure_agent ;;
   tool) cmd_tool "$@" ;;
   mcp-url) cmd_mcp_url ;;
+  mcp-headers) cmd_mcp_headers ;;
   open) xdg-open "$CE_HOST" >/dev/null 2>&1 & ;;
   connect | disconnect | agents)
     source "$CE_DIR/lib/agents.sh"

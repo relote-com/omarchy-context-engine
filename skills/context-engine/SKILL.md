@@ -19,7 +19,7 @@ Prefer the MCP tools on the `context-engine` server:
 | `brief` | Start a session: which engines you reach, what each is for, whether you may save there, what changed since the last session, and what never to store. |
 | `find` | Search (`q`) or list recent memories, filtered by `type`, `tags`, `since`. Bodies come back inline. |
 | `get` | Open one memory by ref, e.g. `decision::hyprland-gaps`. |
-| `write` | Save a new memory in one `engine` (required): `note`, `decision` (needs `fields.rationale`), `task`, `person`, `company`, `meeting`. |
+| `write` | Save a new memory in one `engine` (required): `note`, `decision` (needs `fields.rationale`), `task`, `person`, `company`, `meeting`. Always tag it with this machine (below). |
 | `edit` | Change a memory that already exists instead of writing a second one. |
 
 If the MCP tools are not available in this session, the `ce` command does
@@ -29,7 +29,7 @@ the same over HTTP:
 ce brief                     # what changed
 ce find "hyprland gaps"      # search
 ce get decision::hyprland-gaps
-ce remember "Title" --decision --why "because…" --tag hyprland
+ce remember "Title" --decision --why "because…" --tag hyprland   # tags the machine itself
 echo "longer note…" | ce remember --title "Title"
 ce engine                    # which engine new memories go to
 ```
@@ -56,7 +56,14 @@ ce engine                    # which engine new memories go to
    `bar`, `theme`, `keybinding`, `package`). This is how the next agent
    answers "why is my gap 5?" months later, and how the person's other
    machines learn the same preference.
-5. **Use the default engine** (`ce engine` prints it) unless the brief or
+5. **Say which machine.** The person may run Omarchy on several computers
+   that share one engine. Every `write` carries the tag
+   `machine:<hostname>`, with the hostname exactly as `uname -n` prints it
+   on this computer (run it once per session), next to your other tags:
+   `tags: ["omarchy", "hyprland", "machine:air"]`. `ce remember` adds it
+   for you. When a memory you found carries another machine's tag, say so
+   if it matters ("on your desk machine, gaps are 10").
+6. **Use the default engine** (`ce engine` prints it) unless the brief or
    the person says another one fits better: a client's engine for that
    client's work, a team engine for team decisions.
 
