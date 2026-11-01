@@ -189,7 +189,7 @@ tool() {
     -H @<(printf 'authorization: Bearer %s\n' "$CE_KEY") \
     -H "content-type: application/json" \
     -H "user-agent: omarchy-context-engine/$VERSION" \
-    --data-binary @- -w $'\n%{http_code}' <<<"$body") || die "could not reach $CE_HOST"
+    --data-binary @- -w $'\n%{http_code}' < <(printf '%s' "$body")) || die "could not reach $CE_HOST"
   status=${response##*$'\n'}
   response=${response%$'\n'*}
 
@@ -485,11 +485,12 @@ cmd_remember() {
       "${tags[@]}"
   }
   # A notification is a notify-send argument, so it never carries the note's
-  # text: ce's own reasons ("ce: …") are shown, the engine's (which may quote
-  # the note) stay on stderr.
+  # text: ce's own reason (a "ce: …" line) is shown, the engine's (which may
+  # quote the note) stays on stderr.
   not_saved() {
-    local reason="The engine refused it. Run ce remember in a terminal to see why."
-    [[ $1 == "ce: "* ]] && reason=${1:0:200}
+    local reason
+    reason=$(grep -m1 '^ce: ' <<<"$1") || reason="The engine refused it. Run ce remember in a terminal to see why."
+    reason=${reason:0:200}
     $notify && notify-send -a "Context Engine" "Not saved" "$reason"
     exit 1
   }

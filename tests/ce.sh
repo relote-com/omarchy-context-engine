@@ -54,6 +54,7 @@ while (($#)); do
   esac
 done
 name=${url##*/tool/}
+[[ $url == https://unreachable.test/* ]] && { echo "curl: (6) Could not resolve host: unreachable.test" >&2; exit 6; }
 if [[ $name == write && $body == *'"title":"Refuse '* ]]; then
   jq -c '{text: "No: \(.title) is not allowed"}' <<<"$body"
   printf '\n400'
@@ -233,21 +234,23 @@ SECRET="fixture-$RANDOM$RANDOM"
 mkdir -p "$WORK/replies-secret"
 "$CE_TEST_JQ" --arg s "$SECRET" '.data.changed[0].ref += "-" + $s | .text += $s' "$WORK/replies/brief.json" >"$WORK/replies-secret/brief.json"
 "$CE_TEST_JQ" --arg s "$SECRET" '.data.hits[0].ref = "note::gaps-" + $s' "$WORK/replies/find.json" >"$WORK/replies-secret/find.json"
-(
-  export CE_TEST_REPLIES="$WORK/replies-secret"
-  printf 'Title %s\nBody %s\n' "$SECRET" "$SECRET" | "$CE" remember --quiet --notify --decision - ||
-    fail "ce remember - exited $?"
-  printf 'Refuse %s\n' "$SECRET" | "$CE" remember --quiet --notify - 2>/dev/null
-  printf 'query %s' "$SECRET" | "$CE" find --styled - >/dev/null || fail "ce find - exited $?"
-  "$CE" brief >"$LOG/brief-secret" || fail "ce brief exited $?"
-  "$CE" brief --summary >/dev/null || fail "ce brief --summary exited $?"
-)
+export CE_TEST_REPLIES="$WORK/replies-secret"
+printf 'Title %s\nBody %s\n' "$SECRET" "$SECRET" | "$CE" remember --quiet --notify --decision - ||
+  fail "ce remember - exited $?"
+printf 'Refuse %s\n' "$SECRET" | "$CE" remember --quiet --notify - 2>/dev/null
+printf 'query %s' "$SECRET" | "$CE" find --styled - >"$LOG/find-secret" || fail "ce find - exited $?"
+"$CE" brief >"$LOG/brief-secret" || fail "ce brief exited $?"
+"$CE" brief --summary >"$LOG/summary-secret" || fail "ce brief --summary exited $?"
+CE_HOST=https://unreachable.test "$CE" remember --quiet --notify - <<<"Offline $SECRET" 2>/dev/null
+export CE_TEST_REPLIES="$WORK/replies"
 check "ce remember - saves the note read from stdin, with its rationale" \
   "$CE_TEST_JQ" -e --arg s "$SECRET" '.title == "Title \($s)" and .body == "Body \($s)" and .fields.rationale == "Body \($s)"' "$LOG/writes"
 check "a note, a query or engine text is in no command line" \
   bash -c '! grep -qF "$1" "$2" "$3"' _ "$SECRET" "$LOG/argv" "$LOG/jq-argv"
 check "and the commands did run: saved, refused, machines read back" \
-  bash -c 'grep -qF "Remembered" "$1" && grep -qF "Not saved" "$1" && grep -qF "←  air-13" "$2"' _ "$LOG/argv" "$LOG/brief-secret"
+  bash -c 'grep -qF "Remembered" "$1" && grep -qF "Not saved The engine refused it" "$1" &&
+    grep -qF "Not saved ce: could not reach" "$1" && grep -qF "machine:air-13" "$2" &&
+    grep -qF "←  air-13" "$3" && grep -qF "from air-13" "$4"' _ "$LOG/argv" "$LOG/find-secret" "$LOG/brief-secret" "$LOG/summary-secret"
 
 # --- setup with consent: a fresh machine, nothing to keep --------------------
 
