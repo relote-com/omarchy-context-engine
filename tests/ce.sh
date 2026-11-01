@@ -54,7 +54,11 @@ while (($#)); do
   esac
 done
 name=${url##*/tool/}
-if [[ $name == write ]]; then
+if [[ $name == write && $body == *'"title":"Refuse '* ]]; then
+  jq -c '{text: "No: \(.title) is not allowed"}' <<<"$body"
+  printf '\n400'
+  exit 0
+elif [[ $name == write ]]; then
   echo "$body" >>"$CE_TEST_LOG/writes"
   jq -c '{text: "Saved", data: {ref: "\(.type)::saved"}}' <<<"$body"
 else
@@ -226,23 +230,24 @@ SECRET="fixture-$RANDOM$RANDOM"
 : >"$LOG/argv"
 : >"$LOG/jq-argv"
 : >"$LOG/writes"
-cp -r "$WORK/replies" "$WORK/replies.away"
-"$CE_TEST_JQ" --arg s "$SECRET" '.data.changed[0].ref += "-" + $s | .text += $s' "$WORK/replies.away/brief.json" >"$WORK/replies/brief.json"
-"$CE_TEST_JQ" --arg s "$SECRET" '.data.hits[0].ref = "note::gaps-" + $s' "$WORK/replies.away/find.json" >"$WORK/replies/find.json"
-printf 'Title %s\nBody %s\n' "$SECRET" "$SECRET" | "$CE" remember --quiet --notify --decision - ||
-  fail "ce remember - exited $?"
-printf 'query %s' "$SECRET" | "$CE" find --styled - >/dev/null || fail "ce find - exited $?"
-"$CE" brief >/dev/null || fail "ce brief exited $?"
-"$CE" brief --summary >/dev/null || fail "ce brief --summary exited $?"
-"$CE" get "note::$SECRET" >/dev/null || fail "ce get exited $?"
-rm -rf "$WORK/replies"
-mv "$WORK/replies.away" "$WORK/replies"
+mkdir -p "$WORK/replies-secret"
+"$CE_TEST_JQ" --arg s "$SECRET" '.data.changed[0].ref += "-" + $s | .text += $s' "$WORK/replies/brief.json" >"$WORK/replies-secret/brief.json"
+"$CE_TEST_JQ" --arg s "$SECRET" '.data.hits[0].ref = "note::gaps-" + $s' "$WORK/replies/find.json" >"$WORK/replies-secret/find.json"
+(
+  export CE_TEST_REPLIES="$WORK/replies-secret"
+  printf 'Title %s\nBody %s\n' "$SECRET" "$SECRET" | "$CE" remember --quiet --notify --decision - ||
+    fail "ce remember - exited $?"
+  printf 'Refuse %s\n' "$SECRET" | "$CE" remember --quiet --notify - 2>/dev/null
+  printf 'query %s' "$SECRET" | "$CE" find --styled - >/dev/null || fail "ce find - exited $?"
+  "$CE" brief >"$LOG/brief-secret" || fail "ce brief exited $?"
+  "$CE" brief --summary >/dev/null || fail "ce brief --summary exited $?"
+)
 check "ce remember - saves the note read from stdin, with its rationale" \
   "$CE_TEST_JQ" -e --arg s "$SECRET" '.title == "Title \($s)" and .body == "Body \($s)" and .fields.rationale == "Body \($s)"' "$LOG/writes"
 check "a note, a query or engine text is in no command line" \
   bash -c '! grep -qF "$1" "$2" "$3"' _ "$SECRET" "$LOG/argv" "$LOG/jq-argv"
-check "and the commands did run" \
-  bash -c 'grep -qF "Remembered" "$1" && grep -qF -- "--slurpfile machines" "$2"' _ "$LOG/argv" "$LOG/jq-argv"
+check "and the commands did run: saved, refused, machines read back" \
+  bash -c 'grep -qF "Remembered" "$1" && grep -qF "Not saved" "$1" && grep -qF "←  air-13" "$2"' _ "$LOG/argv" "$LOG/brief-secret"
 
 # --- setup with consent: a fresh machine, nothing to keep --------------------
 

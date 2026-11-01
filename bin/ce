@@ -424,7 +424,7 @@ cmd_get() {
   shift
   [[ ${1:-} == --engine || ${1:-} == -e ]] && engine=${2:?}
   engine=$(engine_for_write "$engine")
-  tool get "$(jq -nc --rawfile ref <(printf '%s' "$ref") --arg engine "$engine" '{ref: $ref, engine: $engine}')" | jq -r '.text'
+  tool get "$(jq -nc --arg ref "$ref" --arg engine "$engine" '{ref: $ref, engine: $engine}')" | jq -r '.text'
 }
 
 # ce remember [--type note|decision|task] [--title T] [--why R] [--tag t]… [text…]
@@ -474,23 +474,23 @@ cmd_remember() {
   idem=$(printf '%s\n%s\n%s' "$type" "$title" "$body" | sha256sum | cut -c1-32)
 
   local result
-  # The note's text and tags reach jq through file descriptors, not arguments.
+  # The note's text reaches jq through file descriptors, not arguments.
   payload() {
     jq -nc --arg engine "$engine" --arg type "$type" --rawfile title <(printf '%s' "$1") \
       --rawfile body <(printf '%s' "$body") --rawfile why <(printf '%s' "$why") \
-      --arg idem "$idem" --arg machine "$MACHINE_TAG" --rawfile tags <(printf '%s\n' "${tags[@]}") \
-      '{engine: $engine, type: $type, title: $title, body: $body, idem: $idem,
-        tags: (["omarchy", $machine] + ($tags | split("\n") | map(select(. != ""))) | unique)}
-        + (if $why != "" then {fields: {rationale: $why}} else {} end)'
+      --arg idem "$idem" --arg machine "$MACHINE_TAG" \
+      --args '{engine: $engine, type: $type, title: $title, body: $body, idem: $idem,
+        tags: (["omarchy", $machine] + $ARGS.positional | unique)}
+        + (if $why != "" then {fields: {rationale: $why}} else {} end)' \
+      "${tags[@]}"
   }
-  # A notification is a notify-send argument: it never carries the note's
-  # text, and a refusal that quotes it has those parts cut out.
+  # A notification is a notify-send argument, so it never carries the note's
+  # text: ce's own reasons ("ce: …") are shown, the engine's (which may quote
+  # the note) stay on stderr.
   not_saved() {
-    local reason=$1 part
-    for part in "$title" "$body" "$why"; do
-      [[ -n $part ]] && reason=${reason//"$part"/…}
-    done
-    $notify && notify-send -a "Context Engine" "Not saved" "${reason:0:200}"
+    local reason="The engine refused it. Run ce remember in a terminal to see why."
+    [[ $1 == "ce: "* ]] && reason=${1:0:200}
+    $notify && notify-send -a "Context Engine" "Not saved" "$reason"
     exit 1
   }
 
