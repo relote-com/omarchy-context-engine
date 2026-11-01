@@ -1,6 +1,6 @@
 # Context Engine for Omarchy
 
-One memory for every agent on your Omarchy machines. Version 0.2.1.
+One memory for every agent on your Omarchy machines. Version 0.2.2.
 
 Omarchy can launch Claude Code, Codex, OpenCode, Hermes and more from one
 keybinding, and each of them normally starts from nothing. This plugin
@@ -95,6 +95,7 @@ ce brief --summary                         # what changed since you last looked
 ce find "hyprland gaps"                    # search across your engines
 ce remember "Gaps are 5 on the Air" --decision --why "10 wasted space on a 13in screen"
 git log -1 --format=%B | ce remember --tag release
+echo "private note" | ce remember -        # stdin: the text stays out of ps
 ce engine acme                             # save to another engine by default
 ce agents                                  # which agents are connected
 ```
@@ -127,6 +128,15 @@ the other agents keep a copy in their own config, which `ce` sets to mode
 600. The key never goes on a command line. Writes are credited to you. To
 give agents read-only access, make a key with *Can read* and run `ce login`
 again.
+
+What you write, search and ask is kept off command lines too, since every
+account on the computer can read those (`ps`). The box hands Remember and
+Find text to `ce` on stdin, and `ce` passes it to `jq` and `curl` the same
+way. A note or query you type as an argument in a terminal is in `ps` while
+`ce` runs; pipe it instead (`echo … | ce remember -`, `echo … | ce find -`).
+One exception: Ask hands the question to `omarchy agent prompt`, which only
+takes it as an argument and passes it to your agent as one, so a question is
+visible in `ps` while the agent runs.
 
 ## How it works
 

@@ -180,8 +180,8 @@ require_key() {
 
 # POST /tool/<name> with a JSON body. Prints the envelope {text, data, isError}
 # on success; on a refusal prints its text to stderr and fails.
-# The key reaches curl through a file descriptor, never its arguments, so ps
-# cannot show it.
+# The key reaches curl through a file descriptor and the body on stdin, never
+# its arguments, so ps shows neither the key nor what is written or searched.
 tool() {
   local name=$1 body=${2:-'{}'} response status
   require_key
@@ -189,7 +189,7 @@ tool() {
     -H @<(printf 'authorization: Bearer %s\n' "$CE_KEY") \
     -H "content-type: application/json" \
     -H "user-agent: omarchy-context-engine/$VERSION" \
-    --data-binary "$body" -w $'\n%{http_code}') || die "could not reach $CE_HOST"
+    --data-binary @- -w $'\n%{http_code}' <<<"$body") || die "could not reach $CE_HOST"
   status=${response##*$'\n'}
   response=${response%$'\n'*}
 
@@ -257,7 +257,7 @@ EOF
     if [[ $(wc -l <<<"$writable") -eq 1 && -n $writable ]]; then
       engine=$writable
     elif [[ -n $writable ]] && interactive; then
-      engine=$(gum choose --header "Which engine should Omarchy save to by default?" $writable) || die "cancelled"
+      engine=$(gum choose --header "Which engine should Omarchy save to by default?" <<<"$writable") || die "cancelled"
     else
       engine=$(jq -r '.[0].slug // empty' <<<"$engines")
     fi
@@ -331,7 +331,7 @@ cmd_brief() {
   fi
   machines=$(machines_of_changes "$brief")
   if [[ $format == summary ]]; then
-    jq -r --argjson machines "$machines" "$JQ_DEFS"'.data as $d
+    jq -r --slurpfile machines <(printf '%s' "$machines") "$JQ_DEFS"'.data as $d | $machines[0] as $machines
       | (if $d.since then "Changed since you last looked (\($d.since[0:10])):"
          else "Most recent (no earlier visit on record):" end),
         (if ($d.changed // []) == [] then "  Nothing new." else empty end),
@@ -346,8 +346,8 @@ cmd_brief() {
     ' <<<"$brief"
     return
   fi
-  jq -r --argjson machines "$machines" "$JQ_DEFS"'
-    [.data.changed[]? | {ref, machine: $machines[id]} | select(.machine)]
+  jq -r --slurpfile machines <(printf '%s' "$machines") "$JQ_DEFS"'$machines[0] as $machines
+    | [.data.changed[]? | {ref, machine: $machines[id]} | select(.machine)]
     | if length > 0 then "\nFrom which machine:", (.[] | "  \(.ref)  ←  \(.machine)") else empty end
   ' <<<"$brief"
 }
@@ -362,8 +362,8 @@ machines_of_changes() {
     echo '{}'
     return
   fi
-  jq -c --argjson changed "$changed" "$JQ_DEFS"'
-    [.data.hits[]? | {key: id, value: machine}
+  jq -c --slurpfile changed <(printf '%s' "$changed") "$JQ_DEFS"'$changed[0] as $changed
+    | [.data.hits[]? | {key: id, value: machine}
       | select(.value) | select(.key as $id | $changed | index($id))]
     | from_entries
   ' <<<"$recent"
@@ -382,9 +382,11 @@ cmd_find() {
     *) words+=("$1"); shift ;;
     esac
   done
+  # ce find - reads the query from stdin, which keeps it out of ps.
   local q="${words[*]:-}"
+  [[ $q == - ]] && q=$(cat)
   local body
-  body=$(jq -nc --arg q "$q" --arg engine "$engine" --argjson limit "$limit" \
+  body=$(jq -nc --rawfile q <(printf '%s' "$q") --arg engine "$engine" --argjson limit "$limit" \
     --args '{limit: $limit}
       + (if $q != "" then {q: $q} else {} end)
       + (if $engine != "" then {engine: $engine} else {} end)
@@ -422,11 +424,13 @@ cmd_get() {
   shift
   [[ ${1:-} == --engine || ${1:-} == -e ]] && engine=${2:?}
   engine=$(engine_for_write "$engine")
-  tool get "$(jq -nc --arg ref "$ref" --arg engine "$engine" '{ref: $ref, engine: $engine}')" | jq -r '.text'
+  tool get "$(jq -nc --rawfile ref <(printf '%s' "$ref") --arg engine "$engine" '{ref: $ref, engine: $engine}')" | jq -r '.text'
 }
 
 # ce remember [--type note|decision|task] [--title T] [--why R] [--tag t]… [text…]
-# Text may come on stdin. With no title, the first line is the title.
+# Text may come on stdin (or "-"), which keeps it out of ps: arguments are
+# readable by every account on the computer. With no title, the first line is
+# the title.
 cmd_remember() {
   local type=note title="" why="" engine="" quiet=false notify=false tags=() words=()
   while (($#)); do
@@ -450,7 +454,7 @@ cmd_remember() {
     words=("${words[@]:1}")
   fi
   local text="${words[*]:-}"
-  if [[ -z $text && ! -t 0 ]]; then
+  if [[ $text == - ]] || [[ -z $text && ! -t 0 ]]; then
     text=$(cat)
   fi
   [[ -n ${text//[[:space:]]/} ]] || die "nothing to remember"
@@ -470,13 +474,24 @@ cmd_remember() {
   idem=$(printf '%s\n%s\n%s' "$type" "$title" "$body" | sha256sum | cut -c1-32)
 
   local result
+  # The note's text and tags reach jq through file descriptors, not arguments.
   payload() {
-    jq -nc --arg engine "$engine" --arg type "$type" --arg title "$1" --arg body "$body" \
-      --arg why "$why" --arg idem "$idem" --arg machine "$MACHINE_TAG" \
-      --args '{engine: $engine, type: $type, title: $title, body: $body, idem: $idem,
-        tags: (["omarchy", $machine] + $ARGS.positional | unique)}
-        + (if $why != "" then {fields: {rationale: $why}} else {} end)' \
-      "${tags[@]}"
+    jq -nc --arg engine "$engine" --arg type "$type" --rawfile title <(printf '%s' "$1") \
+      --rawfile body <(printf '%s' "$body") --rawfile why <(printf '%s' "$why") \
+      --arg idem "$idem" --arg machine "$MACHINE_TAG" --rawfile tags <(printf '%s\n' "${tags[@]}") \
+      '{engine: $engine, type: $type, title: $title, body: $body, idem: $idem,
+        tags: (["omarchy", $machine] + ($tags | split("\n") | map(select(. != ""))) | unique)}
+        + (if $why != "" then {fields: {rationale: $why}} else {} end)'
+  }
+  # A notification is a notify-send argument: it never carries the note's
+  # text, and a refusal that quotes it has those parts cut out.
+  not_saved() {
+    local reason=$1 part
+    for part in "$title" "$body" "$why"; do
+      [[ -n $part ]] && reason=${reason//"$part"/…}
+    done
+    $notify && notify-send -a "Context Engine" "Not saved" "${reason:0:200}"
+    exit 1
   }
 
   # A title is the record's id, so a second note with the same first line is
@@ -488,20 +503,18 @@ cmd_remember() {
     if grep -qi "title\|taken\|already" <<<"$err"; then
       if ! result=$(tool write "$(payload "$title ($(date '+%Y-%m-%d %H:%M'))")" 2>&1); then
         echo "$result" >&2
-        $notify && notify-send -a "Context Engine" "Not saved" "${result:0:200}"
-        exit 1
+        not_saved "$result"
       fi
     else
       echo "$err" >&2
-      $notify && notify-send -a "Context Engine" "Not saved" "${err:0:200}"
-      exit 1
+      not_saved "$err"
     fi
   fi
 
   local ref
   ref=$(jq -r '.data.ref // .data.record.ref // empty' <<<"$result")
   $quiet || echo "Saved ${ref:-memory} to $engine"
-  $notify && notify-send -a "Context Engine" "Remembered" "$title"
+  $notify && notify-send -a "Context Engine" "Remembered" "Saved to $engine"
   return 0
 }
 
@@ -548,9 +561,9 @@ Usage: ce <command> [args]
   engine [slug]         Show or set the engine new memories go to
 
   brief [--summary]     What changed since you last looked (--json: raw)
-  find [query]          Search memory (no query: most recent)
+  find [query|-]        Search memory (no query: most recent; -: query on stdin)
   get <type::slug>      Open one memory
-  remember [text]       Save a note (stdin works; --decision --why, --task, --tag)
+  remember [text|-]     Save a note (-: text on stdin; --decision --why, --task, --tag)
 
   connect [agent…]      Give coding agents the engine over MCP
   disconnect [agent…]   Remove it again

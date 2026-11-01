@@ -114,6 +114,12 @@ Item {
                              Util.shellQuote(root.ce) + " setup"])
   }
 
+  // Typed text never goes into a command's arguments, which every account on
+  // the computer can read (ps, /proc/<pid>/cmdline). It rides in the
+  // environment (readable only by this user) to a bash that prints it into
+  // the command's stdin. CE_TEXT is unset before the command runs.
+  readonly property string viaStdin: 't=$CE_TEXT; unset CE_TEXT; printf "%s" "$t" | exec "$@"'
+
   function run() {
     if (root.status === "not-signed-in") { root.setup(); return }
 
@@ -122,7 +128,10 @@ Item {
       if (!text) return
       // Detached: the note saves while the box is already gone, and ce
       // reports the outcome as a notification either way.
-      Util.execArgv([root.ce, "remember", "--quiet", "--notify", text])
+      Quickshell.execDetached({
+        command: ["bash", "-lc", root.viaStdin, "ce-remember", root.ce, "remember", "--quiet", "--notify", "-"],
+        environment: { CE_TEXT: text }
+      })
       input.text = ""
       root.dismiss()
       return
@@ -131,24 +140,31 @@ Item {
       if (!text) return
       // Connect the default agent first if it has no engine yet, then open it
       // with the question; with no default agent, Omarchy offers the picker.
-      Util.execArgv(["bash", "-c",
-        '"$1" ensure-agent >/dev/null 2>&1; ' +
-        'if [[ -n $(omarchy-default-agent) ]]; then exec omarchy-agent-prompt "$2"; ' +
-        'else exec omarchy-agent --pick; fi',
-        "ce-ask", root.ce, text])
+      // omarchy-agent-prompt takes the question only as an argument (and hands
+      // it to the agent as one), so it is in ps from there on; until then it
+      // waits in the environment.
+      Quickshell.execDetached({
+        command: ["bash", "-lc",
+          '"$1" ensure-agent >/dev/null 2>&1; ' +
+          'if [[ -n $(omarchy-default-agent) ]]; then exec omarchy-agent-prompt "$CE_TEXT"; ' +
+          'else exec omarchy-agent --pick; fi',
+          "ce-ask", root.ce],
+        environment: { CE_TEXT: text }
+      })
       input.text = ""
       root.dismiss()
       return
     }
     if (runProc.running) return
 
-    var args = root.mode === "find" ? ["find", "--styled", "--limit", "10"].concat(text ? [text] : [])
-             : ["brief", "--summary"]
+    var find = root.mode === "find"
     root.busy = true
-    root.styled = root.mode === "find"
+    root.styled = find
     root.error = ""
     root.result = ""
-    runProc.command = [root.ce].concat(args)
+    runProc.command = find ? ["bash", "-c", root.viaStdin, "ce-find", root.ce, "find", "--styled", "--limit", "10", "-"]
+                           : [root.ce, "brief", "--summary"]
+    runProc.environment = { CE_TEXT: find ? text : null }
     runProc.running = true
   }
 
