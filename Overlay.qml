@@ -118,9 +118,10 @@ Item {
   // the computer can read (ps, /proc/<pid>/cmdline). withText(text, script,
   // args…) runs the bash script with the text in $CE_TEXT, in the environment,
   // which only this user can read. toStdin is the usual script: it hands the
-  // text to the command in its arguments on stdin. Not a login shell, so no
-  // profile script runs with the text in its environment.
-  readonly property string toStdin: 't=$CE_TEXT; unset CE_TEXT; exec "$@" <<<"$t"'
+  // text to the command in its arguments on stdin. Not a login shell, so the
+  // login profile never runs with the text in its environment (the shell's
+  // own PATH already has the agents and ~/.local/bin).
+  readonly property string toStdin: 't=$CE_TEXT; unset CE_TEXT; exec "$@" < <(printf "%s" "$t")'
 
   function withText(text, script, args) {
     return { command: ["bash", "-c", script, "ce-overlay"].concat(args), environment: { CE_TEXT: text } }
@@ -146,15 +147,11 @@ Item {
       // omarchy-agent-prompt takes the question only as an argument (and hands
       // it to the agent as one), so it is in ps from there on; until then it
       // waits in the environment.
-      // A login shell, as Util.execArgv uses, for the agents' PATH; the
-      // question is about to be an argument anyway.
-      var ask = root.withText(text,
+      Quickshell.execDetached(root.withText(text,
         't=$CE_TEXT; unset CE_TEXT; "$1" ensure-agent >/dev/null 2>&1; ' +
         'if [[ -n $(omarchy-default-agent) ]]; then exec omarchy-agent-prompt "$t"; ' +
         'else exec omarchy-agent --pick; fi',
-        [root.ce])
-      ask.command[1] = "-lc"
-      Quickshell.execDetached(ask)
+        [root.ce]))
       input.text = ""
       root.dismiss()
       return

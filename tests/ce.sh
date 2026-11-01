@@ -56,7 +56,7 @@ done
 name=${url##*/tool/}
 [[ $url == https://unreachable.test/* ]] && { echo "curl: (6) Could not resolve host: unreachable.test" >&2; exit 6; }
 if [[ $name == write && $body == *'"title":"Refuse '* ]]; then
-  jq -c '{text: "No: \(.title) is not allowed"}' <<<"$body"
+  jq -c '{text: "No: \(.title) is not allowed:\n\(.body)"}' <<<"$body"
   printf '\n400'
   exit 0
 elif [[ $name == write ]]; then
@@ -237,11 +237,13 @@ mkdir -p "$WORK/replies-secret"
 export CE_TEST_REPLIES="$WORK/replies-secret"
 printf 'Title %s\nBody %s\n' "$SECRET" "$SECRET" | "$CE" remember --quiet --notify --decision - ||
   fail "ce remember - exited $?"
-printf 'Refuse %s\n' "$SECRET" | "$CE" remember --quiet --notify - 2>/dev/null
+printf 'Refuse %s\nce: %s\n' "$SECRET" "$SECRET" | "$CE" remember --quiet --notify - 2>/dev/null &&
+  fail "a refused ce remember exited 0"
 printf 'query %s' "$SECRET" | "$CE" find --styled - >"$LOG/find-secret" || fail "ce find - exited $?"
 "$CE" brief >"$LOG/brief-secret" || fail "ce brief exited $?"
 "$CE" brief --summary >"$LOG/summary-secret" || fail "ce brief --summary exited $?"
-CE_HOST=https://unreachable.test "$CE" remember --quiet --notify - <<<"Offline $SECRET" 2>/dev/null
+CE_HOST=https://unreachable.test "$CE" remember --quiet --notify - <<<"Offline $SECRET" 2>/dev/null &&
+  fail "an offline ce remember exited 0"
 export CE_TEST_REPLIES="$WORK/replies"
 check "ce remember - saves the note read from stdin, with its rationale" \
   "$CE_TEST_JQ" -e --arg s "$SECRET" '.title == "Title \($s)" and .body == "Body \($s)" and .fields.rationale == "Body \($s)"' "$LOG/writes"

@@ -179,7 +179,8 @@ require_key() {
 }
 
 # POST /tool/<name> with a JSON body. Prints the envelope {text, data, isError}
-# on success; on a refusal prints its text to stderr and fails.
+# on success; on a refusal prints its text to stderr and returns 2 (ce's own
+# failures, die, exit 1).
 # The key reaches curl through a file descriptor and the body on stdin, never
 # its arguments, so ps shows neither the key nor what is written or searched.
 tool() {
@@ -197,7 +198,7 @@ tool() {
     die "the key was refused (401). Make a new one and run: ce login"
   elif ((status >= 400)); then
     jq -r '.text // .error_description // .error // .' <<<"$response" >&2 2>/dev/null || echo "$response" >&2
-    return 1
+    return 2
   fi
   echo "$response"
 }
@@ -484,32 +485,24 @@ cmd_remember() {
         + (if $why != "" then {fields: {rationale: $why}} else {} end)' \
       "${tags[@]}"
   }
-  # A notification is a notify-send argument, so it never carries the note's
-  # text: ce's own reason (a "ce: …" line) is shown, the engine's (which may
-  # quote the note) stays on stderr.
-  not_saved() {
-    local reason
-    reason=$(grep -m1 '^ce: ' <<<"$1") || reason="The engine refused it. Run ce remember in a terminal to see why."
-    reason=${reason:0:200}
-    $notify && notify-send -a "Context Engine" "Not saved" "$reason"
-    exit 1
-  }
-
   # A title is the record's id, so a second note with the same first line is
   # refused rather than merged. Date it and try once more.
   # tool is silent on stderr when it succeeds, so 2>&1 only ever adds a refusal.
-  local err
-  if ! result=$(tool write "$(payload "$title")" 2>&1); then
-    err=$result
-    if grep -qi "title\|taken\|already" <<<"$err"; then
-      if ! result=$(tool write "$(payload "$title ($(date '+%Y-%m-%d %H:%M'))")" 2>&1); then
-        echo "$result" >&2
-        not_saved "$result"
-      fi
-    else
-      echo "$err" >&2
-      not_saved "$err"
-    fi
+  local status=0
+  result=$(tool write "$(payload "$title")" 2>&1) || status=$?
+  if ((status == 2)) && grep -qi "title\|taken\|already" <<<"$result"; then
+    status=0
+    result=$(tool write "$(payload "$title ($(date '+%Y-%m-%d %H:%M'))")" 2>&1) || status=$?
+  fi
+  if ((status)); then
+    echo "$result" >&2
+    # A notification is a notify-send argument, so it never carries the
+    # note's text: the engine's refusal (which may quote the note) stays on
+    # stderr; ce's own reason (die's "ce: …", the last line) is shown.
+    local reason="The engine refused it. Run ce remember in a terminal to see why."
+    ((status == 2)) || reason=${result##*$'\n'}
+    $notify && notify-send -a "Context Engine" "Not saved" "${reason:0:200}"
+    exit 1
   fi
 
   local ref
