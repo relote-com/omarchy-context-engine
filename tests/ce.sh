@@ -4,7 +4,8 @@
 #
 # No engine and no agents are needed: curl and claude are stubbed, HOSTNAME is
 # set, and the other agents only have to be on PATH. Checks the machine stamp on writes
-# and in ce brief, that the key never reaches a command line, each agent's
+# and in ce brief, that the key and a note's or a search's text never reach a
+# command line, each agent's
 # config format, that a config ce did not write is left alone, and that
 # ce uninstall leaves HOME exactly as ce setup found it.
 #
@@ -47,13 +48,18 @@ printf '%s\n' "$*" >>"$CE_TEST_LOG/argv"
 while (($#)); do
   case "$1" in
   -H) [[ $2 == @* ]] && cat "${2#@}" >>"$CE_TEST_LOG/headers" || echo "$2" >>"$CE_TEST_LOG/headers"; shift 2 ;;
-  --data-binary) body=$2; shift 2 ;;
+  --data-binary) [[ $2 == @- ]] && body=$(cat) || body=$2; shift 2 ;;
   http*) url=$1; shift ;;
   *) shift ;;
   esac
 done
 name=${url##*/tool/}
-if [[ $name == write ]]; then
+[[ $url == https://unreachable.test/* ]] && { echo "curl: (6) Could not resolve host: unreachable.test" >&2; exit 6; }
+if [[ $name == write && $body == *'"title":"Refuse '* ]]; then
+  jq -c '{text: "No: \(.title) is not allowed:\n\(.body)"}' <<<"$body"
+  printf '\n400'
+  exit 0
+elif [[ $name == write ]]; then
   echo "$body" >>"$CE_TEST_LOG/writes"
   jq -c '{text: "Saved", data: {ref: "\(.type)::saved"}}' <<<"$body"
 else
@@ -79,6 +85,15 @@ add-json)
 *) exit 1 ;;
 esac
 EOF
+
+# jq and notify-send: log their arguments (jq to its own file: the checks
+# below hand the key to jq themselves), then do their job.
+cat >"$STUBS/jq" <<'EOF'
+#!/bin/bash
+printf '%s\n' "$*" >>"$CE_TEST_LOG/jq-argv"
+exec "$CE_TEST_JQ" "$@"
+EOF
+printf '#!/bin/bash\nprintf "%%s\\n" "$*" >>"$CE_TEST_LOG/argv"\n' >"$STUBS/notify-send"
 
 # omarchy-shell: logs each IPC call, as the running shell would receive it.
 cat >"$STUBS/omarchy-shell" <<'EOF'
@@ -109,6 +124,7 @@ cat >"$WORK/replies/brief.json" <<'EOF'
   "changed": [{"engine": {"slug": "omarchy", "name": "Omarchy"}, "ref": "note::gaps", "type": "note", "title": "Gaps are 5",
     "updated": "2026-10-31T08:00:00Z", "change": {"act": "edited", "person": "Ada"}}]}}
 EOF
+echo '{"text": "Gaps are 5", "data": {}}' >"$WORK/replies/get.json"
 cat >"$WORK/replies/find.json" <<'EOF'
 {"text": "1 hit", "data": {"hits": [
   {"ref": "note::gaps", "type": "note", "title": "Gaps are 5", "url": "https://engine.test/n?a=1&b=2 x\t\"y", "engine": {"slug": "omarchy", "name": "Omarchy"},
@@ -125,7 +141,9 @@ EOF
 # agent installed on the machine running the tests never counts.
 TOOLS="$WORK/tools"
 mkdir -p "$TOOLS"
-for tool in awk bash cat chmod cmp cp cut date diff dirname find grep head jq ln mkdir mktemp mv \
+export CE_TEST_JQ
+CE_TEST_JQ=$(command -v jq)
+for tool in awk bash cat chmod cmp cp cut date diff dirname find grep head ln mkdir mktemp mv \
   readlink rm rmdir script sed sha256sum sort stat tac tail tr wc; do
   ln -s "$(command -v "$tool")" "$TOOLS/$tool" || fail "missing tool: $tool"
 done
@@ -204,6 +222,37 @@ login
 check "the key reaches curl as a header" grep -qF "authorization: Bearer $KEY" "$LOG/headers"
 check "the key is in no command line" bash -c '! grep -qF "$1" "$2"' _ "$KEY" "$LOG/argv"
 check "the key file is 0600" test "$(stat -c %a "$HOME/.config/context-engine/config")" = 600
+
+# --- what is written or searched stays off command lines --------------------
+# Arguments are readable by every account on the computer (ps). The overlay
+# hands text to ce on stdin; ce hands it on to jq and curl the same way.
+
+SECRET="fixture-$RANDOM$RANDOM"
+: >"$LOG/argv"
+: >"$LOG/jq-argv"
+: >"$LOG/writes"
+mkdir -p "$WORK/replies-secret"
+"$CE_TEST_JQ" --arg s "$SECRET" '.data.changed[0].ref += "-" + $s | .text += $s' "$WORK/replies/brief.json" >"$WORK/replies-secret/brief.json"
+"$CE_TEST_JQ" --arg s "$SECRET" '.data.hits[0].ref = "note::gaps-" + $s' "$WORK/replies/find.json" >"$WORK/replies-secret/find.json"
+export CE_TEST_REPLIES="$WORK/replies-secret"
+printf 'Title %s\nBody %s\n' "$SECRET" "$SECRET" | "$CE" remember --quiet --notify --decision - ||
+  fail "ce remember - exited $?"
+printf 'Refuse %s\nce: %s\n' "$SECRET" "$SECRET" | "$CE" remember --quiet --notify - 2>/dev/null &&
+  fail "a refused ce remember exited 0"
+printf 'query %s' "$SECRET" | "$CE" find --styled - >"$LOG/find-secret" || fail "ce find - exited $?"
+"$CE" brief >"$LOG/brief-secret" || fail "ce brief exited $?"
+"$CE" brief --summary >"$LOG/summary-secret" || fail "ce brief --summary exited $?"
+CE_HOST=https://unreachable.test "$CE" remember --quiet --notify - <<<"Offline $SECRET" 2>/dev/null &&
+  fail "an offline ce remember exited 0"
+export CE_TEST_REPLIES="$WORK/replies"
+check "ce remember - saves the note read from stdin, with its rationale" \
+  "$CE_TEST_JQ" -e --arg s "$SECRET" '.title == "Title \($s)" and .body == "Body \($s)" and .fields.rationale == "Body \($s)"' "$LOG/writes"
+check "a note, a query or engine text is in no command line" \
+  bash -c '! grep -qF "$1" "$2" "$3"' _ "$SECRET" "$LOG/argv" "$LOG/jq-argv"
+check "and the commands did run: saved, refused, machines read back" \
+  bash -c 'grep -qF "Remembered" "$1" && grep -qF "Not saved The engine refused it" "$1" &&
+    grep -qF "Not saved ce: could not reach" "$1" && grep -qF "machine:air-13" "$2" &&
+    grep -qF "←  air-13" "$3" && grep -qF "from air-13" "$4"' _ "$LOG/argv" "$LOG/find-secret" "$LOG/brief-secret" "$LOG/summary-secret"
 
 # --- setup with consent: a fresh machine, nothing to keep --------------------
 

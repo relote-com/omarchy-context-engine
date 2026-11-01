@@ -114,6 +114,19 @@ Item {
                              Util.shellQuote(root.ce) + " setup"])
   }
 
+  // Typed text never goes into a command's arguments, which every account on
+  // the computer can read (ps, /proc/<pid>/cmdline). withText(text, script,
+  // args…) runs the bash script with the text in $CE_TEXT, in the environment,
+  // which only this user can read. toStdin is the usual script: it hands the
+  // text to the command in its arguments on stdin. Not a login shell, so the
+  // login profile never runs with the text in its environment (the shell's
+  // own PATH already has the agents and ~/.local/bin).
+  readonly property string toStdin: 't=$CE_TEXT; unset CE_TEXT; exec "$@" < <(printf "%s" "$t")'
+
+  function withText(text, script, args) {
+    return { command: ["bash", "-c", script, "ce-overlay"].concat(args), environment: { CE_TEXT: text } }
+  }
+
   function run() {
     if (root.status === "not-signed-in") { root.setup(); return }
 
@@ -122,7 +135,7 @@ Item {
       if (!text) return
       // Detached: the note saves while the box is already gone, and ce
       // reports the outcome as a notification either way.
-      Util.execArgv([root.ce, "remember", "--quiet", "--notify", text])
+      Quickshell.execDetached(root.withText(text, root.toStdin, [root.ce, "remember", "--quiet", "--notify", "-"]))
       input.text = ""
       root.dismiss()
       return
@@ -131,24 +144,29 @@ Item {
       if (!text) return
       // Connect the default agent first if it has no engine yet, then open it
       // with the question; with no default agent, Omarchy offers the picker.
-      Util.execArgv(["bash", "-c",
-        '"$1" ensure-agent >/dev/null 2>&1; ' +
-        'if [[ -n $(omarchy-default-agent) ]]; then exec omarchy-agent-prompt "$2"; ' +
+      // omarchy-agent-prompt takes the question only as an argument (and hands
+      // it to the agent as one), so it is in ps from there on; until then it
+      // waits in the environment.
+      Quickshell.execDetached(root.withText(text,
+        't=$CE_TEXT; unset CE_TEXT; "$1" ensure-agent >/dev/null 2>&1; ' +
+        'if [[ -n $(omarchy-default-agent) ]]; then exec omarchy-agent-prompt "$t"; ' +
         'else exec omarchy-agent --pick; fi',
-        "ce-ask", root.ce, text])
+        [root.ce]))
       input.text = ""
       root.dismiss()
       return
     }
     if (runProc.running) return
 
-    var args = root.mode === "find" ? ["find", "--styled", "--limit", "10"].concat(text ? [text] : [])
-             : ["brief", "--summary"]
+    var find = root.mode === "find"
     root.busy = true
-    root.styled = root.mode === "find"
+    root.styled = find
     root.error = ""
     root.result = ""
-    runProc.command = [root.ce].concat(args)
+    var context = find ? root.withText(text, root.toStdin, [root.ce, "find", "--styled", "--limit", "10", "-"])
+                       : { command: [root.ce, "brief", "--summary"], environment: { CE_TEXT: null } }
+    runProc.command = context.command
+    runProc.environment = context.environment
     runProc.running = true
   }
 
