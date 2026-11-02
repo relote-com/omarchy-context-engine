@@ -283,7 +283,7 @@ check "the file holds the whole question, is 0600, in a 0700 directory" cmp -s "
 check "the question is in no command line" bash -c '! grep -qF "$1" "$2" "$3"' _ "$SECRET" "$LOG/argv" "$LOG/jq-argv"
 check "ce ask connects the default agent first" \
   jq -e '.mcp["context-engine"]' "$HOME/.config/opencode/opencode.json"
-touch -d '2 minutes ago' "$first"
+touch -d '70 seconds ago' "$first"
 printf 'Next %s' "$SECRET" | "$CE" ask - || fail "a second ce ask exited $?"
 second=$(cat "$LOG/asked-file")
 check "the next Ask removes questions over a minute old" test ! -e "$first" -a -f "$second"
@@ -296,6 +296,11 @@ printf 'Lost %s' "$SECRET" | "$CE" ask - || fail "ce ask with no default agent e
 check "with no default agent, Omarchy offers the picker and no file is written" \
   bash -c 'grep -qxF "omarchy-agent --pick" "$1" && [[ ! -s $2 ]] && [[ $(find "$3" -name "question-*" | wc -l) == 2 ]]' \
   _ "$LOG/argv" "$LOG/asked-file" "$XDG_RUNTIME_DIR/context-engine"
+: >"$LOG/argv"
+printf 'Nowhere %s' "$SECRET" | CE_TEST_AGENT=opencode XDG_RUNTIME_DIR="$WORK/no-such-dir" "$CE" ask --notify - 2>/dev/null &&
+  fail "ce ask with no runtime directory exited 0"
+check "an Ask that cannot be handed over says so in a notification, without the question" \
+  bash -c 'grep -qF "Not asked no runtime directory" "$1" && ! grep -qF "$2" "$1"' _ "$LOG/argv" "$SECRET"
 "$CE" uninstall >/dev/null 2>&1
 check "ce uninstall removes the questions" test ! -e "$XDG_RUNTIME_DIR/context-engine"
 

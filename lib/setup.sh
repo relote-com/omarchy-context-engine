@@ -246,7 +246,7 @@ setup_uninstall() {
   remove_keys
   ce_wrote "$HOOK_FILE" && rm "$HOOK_FILE"
   ours "$BIN_LINK" "$CE_DIR/bin/ce" && rm "$BIN_LINK"
-  [[ -n $QUESTION_DIR ]] && rm -rf "$QUESTION_DIR"
+  rm -rf "$QUESTION_DIR"
   if remembered "plugin enabled" && command -v omarchy-plugin-disable >/dev/null; then
     omarchy-plugin-disable "$PLUGIN_ID" >/dev/null 2>&1 || true
   fi

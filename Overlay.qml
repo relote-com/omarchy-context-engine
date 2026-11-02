@@ -146,7 +146,7 @@ Item {
       // question in a file only this user can read, and opens the agent with
       // a prompt that names only that file; with no default agent, Omarchy
       // offers the picker.
-      Quickshell.execDetached(root.withText(text, root.toStdin, [root.ce, "ask", "-"]))
+      Quickshell.execDetached(root.withText(text, root.toStdin, [root.ce, "ask", "--notify", "-"]))
       input.text = ""
       root.dismiss()
       return

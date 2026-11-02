@@ -18,7 +18,7 @@ CONFIG_FILE="$CONFIG_DIR/config"
 STATE_FILE="$CONFIG_DIR/installed"
 # Where Ask keeps a question for the agent to read: the user's runtime
 # directory (0700, a tmpfs the system clears at logout), never a command line.
-QUESTION_DIR=${XDG_RUNTIME_DIR:+$XDG_RUNTIME_DIR/context-engine}
+QUESTION_DIR=${XDG_RUNTIME_DIR:-/run/user/$UID}/context-engine
 SERVER_NAME="context-engine"
 # Which computer a write came from, as the system names it (bash's $HOSTNAME
 # is uname -n). Every write from ce carries it as a machine:<name> tag, so an
@@ -536,29 +536,39 @@ ensure_agent() {
   "${agent}_connected" || { "${agent}_connect" </dev/null && remember "agent $agent"; }
 }
 
-# ce ask [question|-]: open the default agent on a question. Omarchy hands a
-# prompt to the agent only as a command-line argument, which every account on
-# the computer can read, so the question goes into a file only this user can
-# read, and the prompt names just that file. -: the question on stdin.
+# ce ask [--notify] [question|-]: open the default agent on a question.
+# Omarchy hands a prompt to the agent only as a command-line argument, which
+# every account on the computer can read, so the question goes into a file
+# only this user can read, and the prompt names just that file. -: the
+# question on stdin. --notify: say so in a notification if it cannot be asked.
 # Each Ask removes the questions before it, except any from the last minute:
 # an agent opened moments ago may not have read its own yet, and a timer
 # could not know when an agent has. Logout clears the rest.
 cmd_ask() {
-  local question agent file
+  local notify=false question agent file
+  [[ ${1:-} == --notify ]] && { notify=true; shift; }
+  # The reason never quotes the question: a notification is an argument too.
+  not_asked() {
+    $notify && notify-send -a "Context Engine" "Not asked" "$1"
+    die "$1"
+  }
   question=$(text_of "$*")
   [[ -n ${question//[[:space:]]/} ]] || die "nothing to ask"
   agent=$(omarchy-default-agent 2>/dev/null || true)
   # No default agent: Omarchy offers the picker; the question cannot follow.
   [[ -n $agent ]] || exec omarchy-agent --pick </dev/null
+  [[ -d ${QUESTION_DIR%/*} ]] || not_asked "no runtime directory (XDG_RUNTIME_DIR) to keep the question in"
   # Not signed in, or the agent cannot be connected: it still gets the question.
   (ensure_agent "$agent") >/dev/null 2>&1 || true
-  [[ -d ${XDG_RUNTIME_DIR:-} ]] || die "no XDG_RUNTIME_DIR to keep the question in"
-  install -d -m 700 "$QUESTION_DIR"
-  find "$QUESTION_DIR" -maxdepth 1 -name 'question-*' -mmin +1 -delete
+  install -d -m 700 "$QUESTION_DIR" || not_asked "could not make $QUESTION_DIR"
+  # Two Asks at once may both try to remove the same old question.
+  find "$QUESTION_DIR" -maxdepth 1 -name 'question-*' ! -newermt '1 minute ago' -delete 2>/dev/null || true
   # mktemp: a random name, mode 0600 before the question is in it.
-  file=$(mktemp "$QUESTION_DIR/question-XXXXXXXXXX")
-  printf '%s\n' "$question" >"$file"
-  exec omarchy-agent-prompt "Read the question in $file and answer it using the Context Engine tools." </dev/null
+  file=$(mktemp "$QUESTION_DIR/question-XXXXXXXXXX") && printf '%s\n' "$question" >"$file" ||
+    not_asked "could not write the question to $QUESTION_DIR"
+  # Some agents' file tools reach only their workspace (Gemini CLI's), so
+  # the prompt offers cat; Omarchy runs every agent without approval prompts.
+  exec omarchy-agent-prompt "My question is in $file. Read it (with cat if your file tools cannot reach that folder) and answer it using the Context Engine tools." </dev/null
 }
 
 # For agents that ask for headers when they connect (Claude Code's
@@ -594,7 +604,7 @@ Usage: ce <command> [args]
   find [query|-]        Search memory (no query: most recent; -: query on stdin)
   get <type::slug>      Open one memory
   remember [text|-]     Save a note (-: text on stdin; --decision --why, --task, --tag)
-  ask [question|-]      Open your default agent on a question (-: on stdin)
+  ask [question|-]      Open your default agent on a question (-: on stdin, kept out of ps)
 
   connect [agent…]      Give coding agents the engine over MCP
   disconnect [agent…]   Remove it again
