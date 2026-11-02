@@ -1,6 +1,6 @@
 # Context Engine for Omarchy
 
-One memory for every agent on your Omarchy machines. Version 0.2.2.
+One memory for every agent on your Omarchy machines. Version 0.2.3.
 
 Omarchy can launch Claude Code, Codex, OpenCode, Hermes and more from one
 keybinding, and each of them normally starts from nothing. This plugin
@@ -96,6 +96,7 @@ ce find "hyprland gaps"                    # search across your engines
 ce remember "Gaps are 5 on the Air" --decision --why "10 wasted space on a 13in screen"
 git log -1 --format=%B | ce remember --tag release
 echo "private note" | ce remember -        # stdin: the text stays out of ps
+echo "what did we decide?" | ce ask -      # open your default agent on it
 ce engine acme                             # save to another engine by default
 ce agents                                  # which agents are connected
 ```
@@ -103,7 +104,7 @@ ce agents                                  # which agents are connected
 ## What it changes on your machine
 
 Everything outside the plugin folder is written by `ce setup` (or
-`ce connect`) and removed by `ce uninstall`. What it created is listed in
+`ce connect`, or Ask) and removed by `ce uninstall`. What it created is listed in
 `~/.config/context-engine/installed`, so uninstall removes exactly that.
 
 | File | What |
@@ -120,6 +121,7 @@ Everything outside the plugin folder is written by `ce setup` (or
 | `~/.config/omarchy/extensions/omarchy-menu.jsonc` | Menu rows between marker comments |
 | `~/.config/hypr/context_engine.lua` + one `require` line | The two keys (asks first) |
 | `~/.config/omarchy/hooks/post-update.d/context-engine` | Records Omarchy updates (asks first) |
+| `$XDG_RUNTIME_DIR/context-engine/question-…` | The question Ask hands your agent (mode 600), removed by a later Ask |
 
 Every agent reaches `https://app.contextengine.com/mcp` with the same key as
 a Bearer header, and the key decides which engines they reach. Claude Code
@@ -134,15 +136,23 @@ account on the computer can read those (`ps`). The box hands Remember and
 Find text to `ce` on stdin, and `ce` passes it to `jq` and `curl` the same
 way. A note or query you type as an argument in a terminal is in `ps` while
 `ce` runs; pipe it instead (`echo … | ce remember -`, `echo … | ce find -`).
-One exception: Ask hands the question to `omarchy agent prompt`, which only
-takes it as an argument and passes it to your agent as one, so a question is
-visible in `ps` while the agent runs.
+Ask keeps the question off command lines as well. Omarchy hands a prompt
+to your agent only as an argument, so the box gives the question to
+`ce ask` on stdin, and `ce ask` writes it to a file only you can read (mode
+600, in `$XDG_RUNTIME_DIR/context-engine/`, mode 700). The agent opens with a
+fixed prompt that names only that file: "Read the question in … and answer
+it using the Context Engine tools." Each Ask removes the questions before it,
+except any from the last minute (an agent opened moments ago may not have
+read its own yet); logging out clears the rest, and so does `ce uninstall`.
+Omarchy opens every agent in its "don't stop to ask" mode, so the agent
+reads the file without asking you first.
 
 ## How it works
 
-- **Questions go to your agent, not to `ce`.** Ask hands the question to
-  `omarchy agent prompt`, so the answer comes from whichever agent you chose
-  in Omarchy, reading the engine through its MCP server. If that agent has no
+- **Questions go to your agent, not to the engine's.** Ask (`ce ask`) hands
+  the question to `omarchy agent prompt` in a file, so the answer comes from
+  whichever agent you chose in Omarchy, reading the engine through its MCP
+  server. If that agent has no
   engine yet (say you changed the default after setup), Ask connects it first.
 - **`bin/ce`** is a small bash client for the desktop's quick paths, over the
   engine's plain HTTP door `POST /tool/<name>` (`brief`, `find`, `get`,

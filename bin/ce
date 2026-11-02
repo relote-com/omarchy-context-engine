@@ -16,6 +16,9 @@ CONFIG_FILE="$CONFIG_DIR/config"
 # undo exactly that: "made <path>" (did not exist before), "mode <path> <octal>"
 # (permissions before ce tightened them), "agent <name>", "plugin enabled".
 STATE_FILE="$CONFIG_DIR/installed"
+# Where Ask keeps a question for the agent to read: the user's runtime
+# directory (0700, a tmpfs the system clears at logout), never a command line.
+QUESTION_DIR=${XDG_RUNTIME_DIR:+$XDG_RUNTIME_DIR/context-engine}
 SERVER_NAME="context-engine"
 # Which computer a write came from, as the system names it (bash's $HOSTNAME
 # is uname -n). Every write from ce carries it as a machine:<name> tag, so an
@@ -525,6 +528,33 @@ cmd_ensure_agent() {
   "${agent}_connected" || { "${agent}_connect" </dev/null && remember "agent $agent"; }
 }
 
+# ce ask [question|-]: open the default agent on a question. Omarchy hands a
+# prompt to the agent only as a command-line argument, which every account on
+# the computer can read, so the question goes into a file only this user can
+# read, and the prompt names just that file. -: the question on stdin.
+# Each Ask removes the questions before it, except any from the last minute:
+# an agent opened moments ago may not have read its own yet, and a timer
+# could not know when an agent has. Logout clears the rest.
+cmd_ask() {
+  local question="$*" file
+  if [[ $question == - ]] || [[ -z $question && ! -t 0 ]]; then
+    question=$(cat)
+  fi
+  [[ -n ${question//[[:space:]]/} ]] || die "nothing to ask"
+  # Not signed in, or the agent cannot be connected: it still gets the question.
+  (cmd_ensure_agent) >/dev/null 2>&1 || true
+  # No default agent: Omarchy offers the picker; the question cannot follow.
+  [[ -n $(omarchy-default-agent 2>/dev/null) ]] || exec omarchy-agent --pick </dev/null
+  [[ -n $QUESTION_DIR && -d $XDG_RUNTIME_DIR ]] || die "no XDG_RUNTIME_DIR to keep the question in"
+  mkdir -p "$QUESTION_DIR"
+  chmod 700 "$QUESTION_DIR"
+  find "$QUESTION_DIR" -maxdepth 1 -name 'question-*' -mmin +1 -delete
+  # mktemp: a random name, mode 0600 before the question is in it.
+  file=$(mktemp "$QUESTION_DIR/question-XXXXXXXXXX")
+  printf '%s\n' "$question" >"$file"
+  exec omarchy-agent-prompt "Read the question in $file and answer it using the Context Engine tools." </dev/null
+}
+
 # For agents that ask for headers when they connect (Claude Code's
 # headersHelper): the key stays in this computer's config, not in theirs.
 cmd_mcp_headers() {
@@ -558,6 +588,7 @@ Usage: ce <command> [args]
   find [query|-]        Search memory (no query: most recent; -: query on stdin)
   get <type::slug>      Open one memory
   remember [text|-]     Save a note (-: text on stdin; --decision --why, --task, --tag)
+  ask [question|-]      Open your default agent on a question (-: on stdin)
 
   connect [agent…]      Give coding agents the engine over MCP
   disconnect [agent…]   Remove it again
@@ -582,6 +613,7 @@ main() {
   find | search) cmd_find "$@" ;;
   get) cmd_get "$@" ;;
   remember | save | note) cmd_remember "$@" ;;
+  ask) cmd_ask "$@" ;;
   ensure-agent) cmd_ensure_agent ;;
   tool) cmd_tool "$@" ;;
   mcp-url) cmd_mcp_url ;;

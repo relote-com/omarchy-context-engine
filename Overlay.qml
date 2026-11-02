@@ -142,16 +142,11 @@ Item {
     }
     if (root.mode === "ask") {
       if (!text) return
-      // Connect the default agent first if it has no engine yet, then open it
-      // with the question; with no default agent, Omarchy offers the picker.
-      // omarchy-agent-prompt takes the question only as an argument (and hands
-      // it to the agent as one), so it is in ps from there on; until then it
-      // waits in the environment.
-      Quickshell.execDetached(root.withText(text,
-        't=$CE_TEXT; unset CE_TEXT; "$1" ensure-agent >/dev/null 2>&1; ' +
-        'if [[ -n $(omarchy-default-agent) ]]; then exec omarchy-agent-prompt "$t"; ' +
-        'else exec omarchy-agent --pick; fi',
-        [root.ce]))
+      // ce ask connects the default agent if it has no engine yet, puts the
+      // question in a file only this user can read, and opens the agent with
+      // a prompt that names only that file; with no default agent, Omarchy
+      // offers the picker.
+      Quickshell.execDetached(root.withText(text, root.toStdin, [root.ce, "ask", "-"]))
       input.text = ""
       root.dismiss()
       return
