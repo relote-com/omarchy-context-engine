@@ -139,10 +139,11 @@ way. A note or query you type as an argument in a terminal is in `ps` while
 Ask keeps the question off command lines as well. Omarchy hands a prompt
 to your agent only as an argument, so the box gives the question to
 `ce ask` on stdin, and `ce ask` writes it to a file only you can read (mode
-600, in `$XDG_RUNTIME_DIR/context-engine/`, mode 700). The agent opens with a
-fixed prompt that names only that file: "My question is in …. Read it (with
-cat if your file tools cannot reach that folder) and answer it using the
-Context Engine tools." Each Ask removes the questions before it, except any
+600, in `$XDG_RUNTIME_DIR/context-engine/`, mode 700; `/run/user/<uid>` when
+`XDG_RUNTIME_DIR` is unset). The agent opens with a
+fixed prompt that names only that file: "Read my question in … and answer it
+using the Context Engine tools (if your file tools cannot reach that folder,
+use cat)." Each Ask removes the questions before it, except any
 from the last minute (an agent opened moments ago may not have read its own
 yet); logging out clears the rest, and so does `ce uninstall`. Omarchy opens
 every agent in its "don't stop to ask" mode, so the agent reads the file

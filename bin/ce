@@ -549,7 +549,7 @@ cmd_ask() {
   [[ ${1:-} == --notify ]] && { notify=true; shift; }
   # The reason never quotes the question: a notification is an argument too.
   not_asked() {
-    $notify && notify-send -a "Context Engine" "Not asked" "$1"
+    $notify && { notify-send -a "Context Engine" "Not asked" "$1" || true; }
     die "$1"
   }
   question=$(text_of "$*")
@@ -564,11 +564,12 @@ cmd_ask() {
   # Two Asks at once may both try to remove the same old question.
   find "$QUESTION_DIR" -maxdepth 1 -name 'question-*' ! -newermt '1 minute ago' -delete 2>/dev/null || true
   # mktemp: a random name, mode 0600 before the question is in it.
-  file=$(mktemp "$QUESTION_DIR/question-XXXXXXXXXX") && printf '%s\n' "$question" >"$file" ||
-    not_asked "could not write the question to $QUESTION_DIR"
+  file=$(mktemp "$QUESTION_DIR/question-XXXXXXXXXX") || not_asked "could not write the question to $QUESTION_DIR"
+  printf '%s\n' "$question" >"$file" || { rm -f "$file"; not_asked "could not write the question to $QUESTION_DIR"; }
   # Some agents' file tools reach only their workspace (Gemini CLI's), so
   # the prompt offers cat; Omarchy runs every agent without approval prompts.
-  exec omarchy-agent-prompt "My question is in $file. Read it (with cat if your file tools cannot reach that folder) and answer it using the Context Engine tools." </dev/null
+  # The path is never last, so no full stop can be read as part of it.
+  exec omarchy-agent-prompt "Read my question in $file and answer it using the Context Engine tools (if your file tools cannot reach that folder, use cat)." </dev/null
 }
 
 # For agents that ask for headers when they connect (Claude Code's
