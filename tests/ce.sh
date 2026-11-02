@@ -102,7 +102,7 @@ printf '#!/bin/bash\nprintf "%%s\\n" "omarchy-agent $*" >>"$CE_TEST_LOG/argv"\n'
 cat >"$STUBS/omarchy-agent-prompt" <<'EOF'
 #!/bin/bash
 printf '%s\n' "$*" >>"$CE_TEST_LOG/argv"
-file=$(grep -oE "$XDG_RUNTIME_DIR/context-engine/question-[A-Za-z0-9]+" <<<"$*")
+file=$(grep -oE "$XDG_RUNTIME_DIR/relote.context-engine/question-[A-Za-z0-9]+" <<<"$*")
 echo "$file" >"$CE_TEST_LOG/asked-file"
 [[ -f $file ]] && { echo "$(stat -c %a "$file") $(stat -c %a "$(dirname "$file")")"; cat "$file"; } >"$CE_TEST_LOG/asked"
 EOF
@@ -277,7 +277,7 @@ export CE_TEST_AGENT=opencode
 printf 'What is %s?\nSecond line %s' "$SECRET" "$SECRET" | "$CE" ask - || fail "ce ask - exited $?"
 first=$(cat "$LOG/asked-file")
 check "ce ask opens the agent on a file in the runtime directory" \
-  bash -c '[[ $1 == "$2"/context-engine/question-* ]]' _ "$first" "$XDG_RUNTIME_DIR"
+  bash -c '[[ $1 == "$2"/relote.context-engine/question-* ]]' _ "$first" "$XDG_RUNTIME_DIR"
 printf '600 700\nWhat is %s?\nSecond line %s\n' "$SECRET" "$SECRET" >"$LOG/asked-expected"
 check "the file holds the whole question, is 0600, in a 0700 directory" cmp -s "$LOG/asked-expected" "$LOG/asked"
 check "the question is in no command line" bash -c '! grep -qF "$1" "$2" "$3"' _ "$SECRET" "$LOG/argv" "$LOG/jq-argv"
@@ -295,14 +295,14 @@ export CE_TEST_AGENT=
 printf 'Lost %s' "$SECRET" | "$CE" ask - || fail "ce ask with no default agent exited $?"
 check "with no default agent, Omarchy offers the picker and no file is written" \
   bash -c 'grep -qxF "omarchy-agent --pick" "$1" && [[ ! -s $2 ]] && [[ $(find "$3" -name "question-*" | wc -l) == 2 ]]' \
-  _ "$LOG/argv" "$LOG/asked-file" "$XDG_RUNTIME_DIR/context-engine"
+  _ "$LOG/argv" "$LOG/asked-file" "$XDG_RUNTIME_DIR/relote.context-engine"
 : >"$LOG/argv"
 printf 'Nowhere %s' "$SECRET" | CE_TEST_AGENT=opencode XDG_RUNTIME_DIR="$WORK/no-such-dir" "$CE" ask --notify - 2>/dev/null &&
   fail "ce ask with no runtime directory exited 0"
 check "an Ask that cannot be handed over says so in a notification, without the question" \
   bash -c 'grep -qF "Not asked no runtime directory" "$1" && ! grep -qF "$2" "$1"' _ "$LOG/argv" "$SECRET"
 "$CE" uninstall >/dev/null 2>&1
-check "ce uninstall removes the questions" test ! -e "$XDG_RUNTIME_DIR/context-engine"
+check "ce uninstall removes the questions" test ! -e "$XDG_RUNTIME_DIR/relote.context-engine"
 
 # --- setup with consent: a fresh machine, nothing to keep --------------------
 

@@ -121,7 +121,7 @@ Everything outside the plugin folder is written by `ce setup` (or
 | `~/.config/omarchy/extensions/omarchy-menu.jsonc` | Menu rows between marker comments |
 | `~/.config/hypr/context_engine.lua` + one `require` line | The two keys (asks first) |
 | `~/.config/omarchy/hooks/post-update.d/context-engine` | Records Omarchy updates (asks first) |
-| `$XDG_RUNTIME_DIR/context-engine/question-…` | The question Ask hands your agent (mode 600), removed by a later Ask |
+| `$XDG_RUNTIME_DIR/relote.context-engine/question-…` | The question Ask hands your agent (mode 600), removed by a later Ask |
 
 Every agent reaches `https://app.contextengine.com/mcp` with the same key as
 a Bearer header, and the key decides which engines they reach. Claude Code
@@ -139,7 +139,7 @@ way. A note or query you type as an argument in a terminal is in `ps` while
 Ask keeps the question off command lines as well. Omarchy hands a prompt
 to your agent only as an argument, so the box gives the question to
 `ce ask` on stdin, and `ce ask` writes it to a file only you can read (mode
-600, in `$XDG_RUNTIME_DIR/context-engine/`, mode 700; `/run/user/<uid>` when
+600, in `$XDG_RUNTIME_DIR/relote.context-engine/`, mode 700; `/run/user/<uid>` when
 `XDG_RUNTIME_DIR` is unset). The agent opens with a
 fixed prompt that names only that file: "Read my question in … and answer it
 using the Context Engine tools (if your file tools cannot reach that folder,

@@ -16,9 +16,6 @@ CONFIG_FILE="$CONFIG_DIR/config"
 # undo exactly that: "made <path>" (did not exist before), "mode <path> <octal>"
 # (permissions before ce tightened them), "agent <name>", "plugin enabled".
 STATE_FILE="$CONFIG_DIR/installed"
-# Where Ask keeps a question for the agent to read: the user's runtime
-# directory (0700, a tmpfs the system clears at logout), never a command line.
-QUESTION_DIR=${XDG_RUNTIME_DIR:-/run/user/$UID}/context-engine
 SERVER_NAME="context-engine"
 # Which computer a write came from, as the system names it (bash's $HOSTNAME
 # is uname -n). Every write from ce carries it as a machine:<name> tag, so an
@@ -32,6 +29,10 @@ JQ_DEFS='def machine: [(.fields.tags // [])[] | select(startswith("machine:")) |
 
 { read -r VERSION && read -r PLUGIN_ID; } < <(jq -r '.version, .id' "$CE_DIR/manifest.json" 2>/dev/null) || true
 VERSION=${VERSION:-dev} PLUGIN_ID=${PLUGIN_ID:-relote.context-engine}
+# Where Ask keeps a question for the agent to read: the user's runtime
+# directory (0700, a tmpfs the system clears at logout), never a command line.
+# Named for the plugin, so its cleanup never meets another tool's files.
+QUESTION_DIR=${XDG_RUNTIME_DIR:-/run/user/$UID}/$PLUGIN_ID
 
 CE_HOST="${CE_HOST:-}"
 CE_KEY="${CE_KEY:-}"
