@@ -102,7 +102,7 @@ printf '#!/bin/bash\nprintf "%%s\\n" "omarchy-agent $*" >>"$CE_TEST_LOG/argv"\n'
 cat >"$STUBS/omarchy-agent-prompt" <<'EOF'
 #!/bin/bash
 printf '%s\n' "$*" >>"$CE_TEST_LOG/argv"
-file=$(sed -nE 's/^Read the question in (.*) and answer it using the Context Engine tools\.$/\1/p' <<<"$*")
+file=$(grep -oE "$XDG_RUNTIME_DIR/context-engine/question-[A-Za-z0-9]+" <<<"$*")
 echo "$file" >"$CE_TEST_LOG/asked-file"
 [[ -f $file ]] && { echo "$(stat -c %a "$file") $(stat -c %a "$(dirname "$file")")"; cat "$file"; } >"$CE_TEST_LOG/asked"
 EOF
@@ -156,7 +156,7 @@ mkdir -p "$TOOLS"
 export CE_TEST_JQ
 CE_TEST_JQ=$(command -v jq)
 for tool in awk bash cat chmod cmp cp cut date diff dirname find grep head ln mkdir mktemp mv \
-  readlink rm rmdir script sed sha256sum sort stat tac tail touch tr wc; do
+  install readlink rm rmdir script sed sha256sum sort stat tac tail touch tr wc; do
   ln -s "$(command -v "$tool")" "$TOOLS/$tool" || fail "missing tool: $tool"
 done
 
@@ -280,7 +280,7 @@ check "ce ask opens the agent on a file in the runtime directory" \
   bash -c '[[ $1 == "$2"/context-engine/question-* ]]' _ "$first" "$XDG_RUNTIME_DIR"
 printf '600 700\nWhat is %s?\nSecond line %s\n' "$SECRET" "$SECRET" >"$LOG/asked-expected"
 check "the file holds the whole question, is 0600, in a 0700 directory" cmp -s "$LOG/asked-expected" "$LOG/asked"
-check "the question is in no command line" bash -c '! grep -qF "$1" "$2"' _ "$SECRET" "$LOG/argv"
+check "the question is in no command line" bash -c '! grep -qF "$1" "$2" "$3"' _ "$SECRET" "$LOG/argv" "$LOG/jq-argv"
 check "ce ask connects the default agent first" \
   jq -e '.mcp["context-engine"]' "$HOME/.config/opencode/opencode.json"
 touch -d '2 minutes ago' "$first"

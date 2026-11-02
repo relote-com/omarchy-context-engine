@@ -431,6 +431,17 @@ cmd_get() {
   tool get "$(jq -nc --arg ref "$ref" --arg engine "$engine" '{ref: $ref, engine: $engine}')" | jq -r '.text'
 }
 
+# text_of <arguments joined>: the text a command was given. "-", or nothing
+# with stdin not a terminal, means stdin, which keeps the text out of ps:
+# arguments are readable by every account on the computer.
+text_of() {
+  if [[ $1 == - ]] || [[ -z $1 && ! -t 0 ]]; then
+    cat
+  else
+    printf '%s' "$1"
+  fi
+}
+
 # ce remember [--type note|decision|task] [--title T] [--why R] [--tag t]… [text…]
 # Text may come on stdin (or "-"), which keeps it out of ps: arguments are
 # readable by every account on the computer. With no title, the first line is
@@ -457,10 +468,8 @@ cmd_remember() {
     title=${words[0]}
     words=("${words[@]:1}")
   fi
-  local text="${words[*]:-}"
-  if [[ $text == - ]] || [[ -z $text && ! -t 0 ]]; then
-    text=$(cat)
-  fi
+  local text
+  text=$(text_of "${words[*]:-}")
   [[ -n ${text//[[:space:]]/} ]] || die "nothing to remember"
 
   local body=$text
@@ -515,15 +524,14 @@ cmd_remember() {
   return 0
 }
 
-# Questions go to Omarchy's default agent, which reads the engine over MCP.
-# Before handing one over, make sure that agent is actually connected: the
-# default can change after setup, and a new agent starts without the server.
-cmd_ensure_agent() {
+# ensure_agent <agent>: questions go to Omarchy's default agent, which reads
+# the engine over MCP. Before handing one over, make sure that agent is
+# actually connected: the default can change after setup, and a new agent
+# starts without the server.
+ensure_agent() {
+  local agent=$1
   require_key
   source "$CE_DIR/lib/agents.sh"
-  local agent
-  agent=$(omarchy-default-agent 2>/dev/null || true)
-  [[ -n $agent ]] || return 0
   valid_agent "$agent" && agent_installed "$agent" || return 0
   "${agent}_connected" || { "${agent}_connect" </dev/null && remember "agent $agent"; }
 }
@@ -536,18 +544,16 @@ cmd_ensure_agent() {
 # an agent opened moments ago may not have read its own yet, and a timer
 # could not know when an agent has. Logout clears the rest.
 cmd_ask() {
-  local question="$*" file
-  if [[ $question == - ]] || [[ -z $question && ! -t 0 ]]; then
-    question=$(cat)
-  fi
+  local question agent file
+  question=$(text_of "$*")
   [[ -n ${question//[[:space:]]/} ]] || die "nothing to ask"
-  # Not signed in, or the agent cannot be connected: it still gets the question.
-  (cmd_ensure_agent) >/dev/null 2>&1 || true
+  agent=$(omarchy-default-agent 2>/dev/null || true)
   # No default agent: Omarchy offers the picker; the question cannot follow.
-  [[ -n $(omarchy-default-agent 2>/dev/null) ]] || exec omarchy-agent --pick </dev/null
-  [[ -n $QUESTION_DIR && -d $XDG_RUNTIME_DIR ]] || die "no XDG_RUNTIME_DIR to keep the question in"
-  mkdir -p "$QUESTION_DIR"
-  chmod 700 "$QUESTION_DIR"
+  [[ -n $agent ]] || exec omarchy-agent --pick </dev/null
+  # Not signed in, or the agent cannot be connected: it still gets the question.
+  (ensure_agent "$agent") >/dev/null 2>&1 || true
+  [[ -d ${XDG_RUNTIME_DIR:-} ]] || die "no XDG_RUNTIME_DIR to keep the question in"
+  install -d -m 700 "$QUESTION_DIR"
   find "$QUESTION_DIR" -maxdepth 1 -name 'question-*' -mmin +1 -delete
   # mktemp: a random name, mode 0600 before the question is in it.
   file=$(mktemp "$QUESTION_DIR/question-XXXXXXXXXX")
@@ -614,7 +620,6 @@ main() {
   get) cmd_get "$@" ;;
   remember | save | note) cmd_remember "$@" ;;
   ask) cmd_ask "$@" ;;
-  ensure-agent) cmd_ensure_agent ;;
   tool) cmd_tool "$@" ;;
   mcp-url) cmd_mcp_url ;;
   mcp-headers) cmd_mcp_headers ;;
