@@ -246,6 +246,9 @@ setup_uninstall() {
   remove_keys
   ce_wrote "$HOOK_FILE" && rm "$HOOK_FILE"
   ours "$BIN_LINK" "$CE_DIR/bin/ce" && rm "$BIN_LINK"
+  # Only what Ask wrote: its questions, then the folder if nothing else is in it.
+  rm -f "$QUESTION_DIR"/question-*
+  rmdir "$QUESTION_DIR" 2>/dev/null || true
   if remembered "plugin enabled" && command -v omarchy-plugin-disable >/dev/null; then
     omarchy-plugin-disable "$PLUGIN_ID" >/dev/null 2>&1 || true
   fi

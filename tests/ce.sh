@@ -95,6 +95,18 @@ exec "$CE_TEST_JQ" "$@"
 EOF
 printf '#!/bin/bash\nprintf "%%s\\n" "$*" >>"$CE_TEST_LOG/argv"\n' >"$STUBS/notify-send"
 
+# omarchy-default-agent answers $CE_TEST_AGENT. omarchy-agent-prompt logs its
+# arguments and keeps what the file its prompt names held, with the modes.
+printf '#!/bin/bash\necho "${CE_TEST_AGENT:-}"\n' >"$STUBS/omarchy-default-agent"
+printf '#!/bin/bash\nprintf "%%s\\n" "omarchy-agent $*" >>"$CE_TEST_LOG/argv"\n' >"$STUBS/omarchy-agent"
+cat >"$STUBS/omarchy-agent-prompt" <<'EOF'
+#!/bin/bash
+printf '%s\n' "$*" >>"$CE_TEST_LOG/argv"
+file=$(grep -oE "$XDG_RUNTIME_DIR/relote.context-engine/question-[A-Za-z0-9]+" <<<"$*")
+echo "$file" >"$CE_TEST_LOG/asked-file"
+[[ -f $file ]] && { echo "$(stat -c %a "$file") $(stat -c %a "$(dirname "$file")")"; cat "$file"; } >"$CE_TEST_LOG/asked"
+EOF
+
 # omarchy-shell: logs each IPC call, as the running shell would receive it.
 cat >"$STUBS/omarchy-shell" <<'EOF'
 #!/bin/bash
@@ -144,7 +156,7 @@ mkdir -p "$TOOLS"
 export CE_TEST_JQ
 CE_TEST_JQ=$(command -v jq)
 for tool in awk bash cat chmod cmp cp cut date diff dirname find grep head ln mkdir mktemp mv \
-  readlink rm rmdir script sed sha256sum sort stat tac tail tr wc; do
+  install readlink rm rmdir script sed sha256sum sort stat tac tail touch tr wc; do
   ln -s "$(command -v "$tool")" "$TOOLS/$tool" || fail "missing tool: $tool"
 done
 
@@ -152,7 +164,9 @@ done
 new_home() {
   export HOME="$WORK/$1"
   mkdir -p "$HOME"
-  unset XDG_CONFIG_HOME CODEX_HOME CLAUDE_CONFIG_DIR CE_HOST CE_KEY CE_ENGINE
+  unset XDG_CONFIG_HOME CODEX_HOME CLAUDE_CONFIG_DIR CE_HOST CE_KEY CE_ENGINE CE_TEST_AGENT
+  export XDG_RUNTIME_DIR="$WORK/$1-run"
+  mkdir -p -m 700 "$XDG_RUNTIME_DIR"
   export PATH="$STUBS:$TOOLS" CE_TEST_LOG="$LOG" CE_TEST_REPLIES="$WORK/replies" CE_TEST_KEY="$KEY" HOSTNAME="$MACHINE"
 }
 
@@ -253,6 +267,42 @@ check "and the commands did run: saved, refused, machines read back" \
   bash -c 'grep -qF "Remembered" "$1" && grep -qF "Not saved The engine refused it" "$1" &&
     grep -qF "Not saved ce: could not reach" "$1" && grep -qF "machine:air-13" "$2" &&
     grep -qF "←  air-13" "$3" && grep -qF "from air-13" "$4"' _ "$LOG/argv" "$LOG/find-secret" "$LOG/brief-secret" "$LOG/summary-secret"
+
+# --- Ask: the question travels in a file, not on a command line ------------
+# Omarchy hands a prompt to the agent only as an argument, so ce ask puts the
+# question in a private file and the prompt names just that file.
+
+: >"$LOG/argv"
+export CE_TEST_AGENT=opencode
+printf 'What is %s?\nSecond line %s' "$SECRET" "$SECRET" | "$CE" ask - || fail "ce ask - exited $?"
+first=$(cat "$LOG/asked-file")
+check "ce ask opens the agent on a file in the runtime directory" \
+  bash -c '[[ $1 == "$2"/relote.context-engine/question-* ]]' _ "$first" "$XDG_RUNTIME_DIR"
+printf '600 700\nWhat is %s?\nSecond line %s\n' "$SECRET" "$SECRET" >"$LOG/asked-expected"
+check "the file holds the whole question, is 0600, in a 0700 directory" cmp -s "$LOG/asked-expected" "$LOG/asked"
+check "the question is in no command line" bash -c '! grep -qF "$1" "$2" "$3"' _ "$SECRET" "$LOG/argv" "$LOG/jq-argv"
+check "ce ask connects the default agent first" \
+  jq -e '.mcp["context-engine"]' "$HOME/.config/opencode/opencode.json"
+touch -d '70 seconds ago' "$first"
+printf 'Next %s' "$SECRET" | "$CE" ask - || fail "a second ce ask exited $?"
+second=$(cat "$LOG/asked-file")
+check "the next Ask removes questions over a minute old" test ! -e "$first" -a -f "$second"
+printf 'Quick %s' "$SECRET" | "$CE" ask - || fail "a third ce ask exited $?"
+check "but keeps one from the last minute, which its agent may not have read yet" \
+  test -f "$second" -a -f "$(cat "$LOG/asked-file")"
+export CE_TEST_AGENT=
+: >"$LOG/asked-file"
+printf 'Lost %s' "$SECRET" | "$CE" ask - || fail "ce ask with no default agent exited $?"
+check "with no default agent, Omarchy offers the picker and no file is written" \
+  bash -c 'grep -qxF "omarchy-agent --pick" "$1" && [[ ! -s $2 ]] && [[ $(find "$3" -name "question-*" | wc -l) == 2 ]]' \
+  _ "$LOG/argv" "$LOG/asked-file" "$XDG_RUNTIME_DIR/relote.context-engine"
+: >"$LOG/argv"
+printf 'Nowhere %s' "$SECRET" | CE_TEST_AGENT=opencode XDG_RUNTIME_DIR="$WORK/no-such-dir" "$CE" ask --notify - 2>/dev/null &&
+  fail "ce ask with no runtime directory exited 0"
+check "an Ask that cannot be handed over says so in a notification, without the question" \
+  bash -c 'grep -qF "Not asked no runtime directory" "$1" && ! grep -qF "$2" "$1"' _ "$LOG/argv" "$SECRET"
+"$CE" uninstall >/dev/null 2>&1
+check "ce uninstall removes the questions" test ! -e "$XDG_RUNTIME_DIR/relote.context-engine"
 
 # --- setup with consent: a fresh machine, nothing to keep --------------------
 

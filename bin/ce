@@ -29,6 +29,10 @@ JQ_DEFS='def machine: [(.fields.tags // [])[] | select(startswith("machine:")) |
 
 { read -r VERSION && read -r PLUGIN_ID; } < <(jq -r '.version, .id' "$CE_DIR/manifest.json" 2>/dev/null) || true
 VERSION=${VERSION:-dev} PLUGIN_ID=${PLUGIN_ID:-relote.context-engine}
+# Where Ask keeps a question for the agent to read: the user's runtime
+# directory (0700, a tmpfs the system clears at logout), never a command line.
+# Named for the plugin, so its cleanup never meets another tool's files.
+QUESTION_DIR=${XDG_RUNTIME_DIR:-/run/user/$UID}/$PLUGIN_ID
 
 CE_HOST="${CE_HOST:-}"
 CE_KEY="${CE_KEY:-}"
@@ -428,6 +432,17 @@ cmd_get() {
   tool get "$(jq -nc --arg ref "$ref" --arg engine "$engine" '{ref: $ref, engine: $engine}')" | jq -r '.text'
 }
 
+# text_of <arguments joined>: the text a command was given. "-", or nothing
+# with stdin not a terminal, means stdin, which keeps the text out of ps:
+# arguments are readable by every account on the computer.
+text_of() {
+  if [[ $1 == - ]] || [[ -z $1 && ! -t 0 ]]; then
+    cat
+  else
+    printf '%s' "$1"
+  fi
+}
+
 # ce remember [--type note|decision|task] [--title T] [--why R] [--tag t]… [text…]
 # Text may come on stdin (or "-"), which keeps it out of ps: arguments are
 # readable by every account on the computer. With no title, the first line is
@@ -454,10 +469,8 @@ cmd_remember() {
     title=${words[0]}
     words=("${words[@]:1}")
   fi
-  local text="${words[*]:-}"
-  if [[ $text == - ]] || [[ -z $text && ! -t 0 ]]; then
-    text=$(cat)
-  fi
+  local text
+  text=$(text_of "${words[*]:-}")
   [[ -n ${text//[[:space:]]/} ]] || die "nothing to remember"
 
   local body=$text
@@ -512,17 +525,52 @@ cmd_remember() {
   return 0
 }
 
-# Questions go to Omarchy's default agent, which reads the engine over MCP.
-# Before handing one over, make sure that agent is actually connected: the
-# default can change after setup, and a new agent starts without the server.
-cmd_ensure_agent() {
+# ensure_agent <agent>: questions go to Omarchy's default agent, which reads
+# the engine over MCP. Before handing one over, make sure that agent is
+# actually connected: the default can change after setup, and a new agent
+# starts without the server.
+ensure_agent() {
+  local agent=$1
   require_key
   source "$CE_DIR/lib/agents.sh"
-  local agent
-  agent=$(omarchy-default-agent 2>/dev/null || true)
-  [[ -n $agent ]] || return 0
   valid_agent "$agent" && agent_installed "$agent" || return 0
   "${agent}_connected" || { "${agent}_connect" </dev/null && remember "agent $agent"; }
+}
+
+# ce ask [--notify] [question|-]: open the default agent on a question.
+# Omarchy hands a prompt to the agent only as a command-line argument, which
+# every account on the computer can read, so the question goes into a file
+# only this user can read, and the prompt names just that file. -: the
+# question on stdin. --notify: say so in a notification if it cannot be asked.
+# Each Ask removes the questions before it, except any from the last minute:
+# an agent opened moments ago may not have read its own yet, and a timer
+# could not know when an agent has. Logout clears the rest.
+cmd_ask() {
+  local notify=false question agent file
+  [[ ${1:-} == --notify ]] && { notify=true; shift; }
+  # The reason never quotes the question: a notification is an argument too.
+  not_asked() {
+    $notify && { notify-send -a "Context Engine" "Not asked" "$1" || true; }
+    die "$1"
+  }
+  question=$(text_of "$*")
+  [[ -n ${question//[[:space:]]/} ]] || die "nothing to ask"
+  agent=$(omarchy-default-agent 2>/dev/null || true)
+  # No default agent: Omarchy offers the picker; the question cannot follow.
+  [[ -n $agent ]] || exec omarchy-agent --pick </dev/null
+  [[ -d ${QUESTION_DIR%/*} ]] || not_asked "no runtime directory (XDG_RUNTIME_DIR) to keep the question in"
+  # Not signed in, or the agent cannot be connected: it still gets the question.
+  (ensure_agent "$agent") >/dev/null 2>&1 || true
+  install -d -m 700 "$QUESTION_DIR" || not_asked "could not make $QUESTION_DIR"
+  # Two Asks at once may both try to remove the same old question.
+  find "$QUESTION_DIR" -maxdepth 1 -name 'question-*' ! -newermt '1 minute ago' -delete 2>/dev/null || true
+  # mktemp: a random name, mode 0600 before the question is in it.
+  file=$(mktemp "$QUESTION_DIR/question-XXXXXXXXXX") || not_asked "could not write the question to $QUESTION_DIR"
+  printf '%s\n' "$question" >"$file" || { rm -f "$file"; not_asked "could not write the question to $QUESTION_DIR"; }
+  # Some agents' file tools reach only their workspace (Gemini CLI's), so
+  # the prompt offers cat; Omarchy runs every agent without approval prompts.
+  # The path is never last, so no full stop can be read as part of it.
+  exec omarchy-agent-prompt "Read my question in $file and answer it using the Context Engine tools (if your file tools cannot reach that folder, use cat)." </dev/null
 }
 
 # For agents that ask for headers when they connect (Claude Code's
@@ -558,6 +606,7 @@ Usage: ce <command> [args]
   find [query|-]        Search memory (no query: most recent; -: query on stdin)
   get <type::slug>      Open one memory
   remember [text|-]     Save a note (-: text on stdin; --decision --why, --task, --tag)
+  ask [question|-]      Open your default agent on a question (-: on stdin, kept out of ps)
 
   connect [agent…]      Give coding agents the engine over MCP
   disconnect [agent…]   Remove it again
@@ -582,7 +631,7 @@ main() {
   find | search) cmd_find "$@" ;;
   get) cmd_get "$@" ;;
   remember | save | note) cmd_remember "$@" ;;
-  ensure-agent) cmd_ensure_agent ;;
+  ask) cmd_ask "$@" ;;
   tool) cmd_tool "$@" ;;
   mcp-url) cmd_mcp_url ;;
   mcp-headers) cmd_mcp_headers ;;
