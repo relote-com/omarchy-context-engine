@@ -532,6 +532,13 @@ check "uninstall after ~/.gemini was deleted removes the key file and the record
 # --- a v0.2.3 install with a symlinked agent config --------------------------
 # v0.2.3 recorded a symlink's own mode, 777, not its target's.
 
+# fake_v023_record <path>: the mode ce recorded for it becomes v0.2.3's 777.
+fake_v023_record() {
+  local state="$HOME/.config/context-engine/installed"
+  sed -i "s|^mode $1 [0-7]*\$|mode $1 777|" "$state"
+  check "the record for $1 is v0.2.3's 777" grep -qxF "mode $1 777" "$state"
+}
+
 new_home v023-link
 umask 022
 mkdir -p "$HOME/dotfiles/cursor" "$HOME/.cursor"
@@ -539,9 +546,7 @@ jq . <<<'{}' >"$HOME/dotfiles/cursor/mcp.json"
 ln -s "$HOME/dotfiles/cursor/mcp.json" "$HOME/.cursor/mcp.json"
 login
 "$CE" connect cursor >/dev/null 2>&1 || fail "ce connect cursor exited $?"
-sed -i "s|^mode $HOME/.cursor/mcp.json [0-7]*\$|mode $HOME/.cursor/mcp.json 777|" "$HOME/.config/context-engine/installed"
-check "the record is v0.2.3's: 777 for the link" \
-  grep -qxF "mode $HOME/.cursor/mcp.json 777" "$HOME/.config/context-engine/installed"
+fake_v023_record "$HOME/.cursor/mcp.json"
 "$CE" uninstall >/dev/null 2>&1 || fail "ce uninstall exited $?"
 check "uninstall leaves a symlinked config's target at the 600 ce gave it, not 777" \
   test "$(mode_of "$HOME/dotfiles/cursor/mcp.json")" = 600
@@ -553,7 +558,7 @@ mkdir -p "$HOME/.cursor"
 jq . <<<'{"mcpServers":{"other":{"url":"https://other.example/mcp"}}}' >"$HOME/.cursor/mcp.json"
 login
 "$CE" connect cursor >/dev/null 2>&1 || fail "ce connect cursor exited $?"
-sed -i "s|^mode $HOME/.cursor/mcp.json [0-7]*\$|mode $HOME/.cursor/mcp.json 777|" "$HOME/.config/context-engine/installed"
+fake_v023_record "$HOME/.cursor/mcp.json"
 "$CE" uninstall >/dev/null 2>&1 || fail "ce uninstall exited $?"
 check "uninstall never puts v0.2.3's 777 on a link replaced by a plain file" \
   test "$(mode_of "$HOME/.cursor/mcp.json")" = 600

@@ -236,7 +236,7 @@ remove_made() {
 # A recorded 777 is never put back: v0.2.3 recorded a symlink's own mode,
 # always 777, not its target's, and the link may since have become a plain
 # file. chmod 777 would make an agent config anyone can edit. The real old
-# mode is unknown, so the file keeps the 600 ce gave it.
+# mode is unknown, so it keeps the one ce gave it (600, or 700 for a folder).
 restore_modes() {
   local path mode
   while read -r path mode; do
