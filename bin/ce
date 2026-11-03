@@ -267,7 +267,7 @@ cmd_login() {
   # refusal below then says to replace it.
   for arg; do
     [[ $arg == ce_* || $arg == *=ce_* ]] &&
-      exposed=$'\nce: that key is now in your shell history: make a new key, delete this one in the engine, and remove the line from your history'
+      exposed=$'\nce: that key is now in your shell history: make a new key, delete this one under AI tools, and remove the line from your history'
   done
   while (($#)); do
     case "$1" in
