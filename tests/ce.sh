@@ -525,8 +525,7 @@ jq . <<<'{"ui":{}}' >"$HOME/.gemini/settings.json"
 login
 "$CE" connect gemini >/dev/null 2>&1 || fail "ce connect gemini exited $?"
 rm -r "$HOME/.gemini"
-"$CE" uninstall >"$LOG/uninstall-gemini-gone" 2>&1
-check "uninstall finishes after a recorded ~/.gemini was deleted" test $? -eq 0
+"$CE" uninstall >"$LOG/uninstall-gemini-gone" 2>&1 || fail "uninstall after ~/.gemini was deleted exited $?"
 check "and removes the key file and the record" \
   test ! -e "$HOME/.config/context-engine/config" -a ! -e "$HOME/.config/context-engine/installed"
 
@@ -543,10 +542,9 @@ login
 sed -i "s|^mode $HOME/.cursor/mcp.json [0-7]*\$|mode $HOME/.cursor/mcp.json 777|" "$HOME/.config/context-engine/installed"
 check "the record is v0.2.3's: 777 for the link" \
   grep -qxF "mode $HOME/.cursor/mcp.json 777" "$HOME/.config/context-engine/installed"
-target_mode=$(mode_of "$HOME/dotfiles/cursor/mcp.json")
 "$CE" uninstall >/dev/null 2>&1 || fail "ce uninstall exited $?"
-check "uninstall leaves a symlinked config's target at its mode, not 777" \
-  test "$(mode_of "$HOME/dotfiles/cursor/mcp.json")" = "$target_mode"
+check "uninstall leaves a symlinked config's target at the 600 ce gave it, not 777" \
+  test "$(mode_of "$HOME/dotfiles/cursor/mcp.json")" = 600
 
 # --- a config jq cannot change -----------------------------------------------
 
