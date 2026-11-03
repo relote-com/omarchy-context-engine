@@ -253,32 +253,38 @@ chmod +x "$LOGGED"/*
 for way in pipe file prompt setup; do
   new_home "argv-$way"
   : >"$LOG/argv"
+  : >"$LOG/jq-argv"
   (
     PATH="$STUBS:$LOGGED"
     case $way in
     pipe) printf '%s\n' "$KEY" | "$CE" login --host "$URL" ;;
     file) "$CE" login --host "$URL" <"$WORK/keyfile" ;;
-    prompt) script -qec "$CE login --host $URL" /dev/null ;;
+    prompt) script -qec "$(printf '%q ' "$CE" login --host "$URL")" /dev/null ;;
     setup) "$CE" setup --yes <"$WORK/keyfile" ;;
     esac
   ) >"$LOG/login-$way" 2>&1
-  check "ce login by $way signs in" grep -qxF "CE_KEY=$KEY" "$HOME/.config/context-engine/config"
-  check "ce login by $way: argv was logged (the key reached the engine)" grep -q "^-sS " "$LOG/argv"
-  check "ce login by $way: the key is in no process's argv" lacks "$KEY" "$LOG/argv"
-  check "ce login by $way: the key is not echoed" lacks "$KEY" "$LOG/login-$way"
+  check "sign-in by $way works" grep -qxF "CE_KEY=$KEY" "$HOME/.config/context-engine/config"
+  check "sign-in by $way: argv was logged (the key reached the engine)" grep -q "^-sS " "$LOG/argv"
+  check "sign-in by $way: the key is in no process's argv" lacks "$KEY" <(cat "$LOG/argv" "$LOG/jq-argv")
+  check "sign-in by $way: the key is not echoed" lacks "$KEY" "$LOG/login-$way"
 done
 
 # --key used to take the key as an argument, in ps and shell history. It is
-# refused, in either spelling, without saving or repeating it.
-for arg in "--key $KEY" "--key=$KEY"; do
+# refused, in either spelling, as is a bare key, without saving or repeating
+# it, and with word to replace it.
+for arg in "--key $KEY" "--key=$KEY" "$KEY"; do
   new_home argv-key
-  label="ce login ${arg%%"$KEY"}"
+  label="ce login ${arg%%"$KEY"}<key>"
   # shellcheck disable=SC2086 # split on purpose: two words, or one
   "$CE" login --host "$URL" $arg </dev/null >"$LOG/login-key" 2>&1 && fail "$label exited 0"
   check "$label is refused and saves nothing" test ! -e "$HOME/.config/context-engine/config"
   check "$label points to stdin" grep -qF "ce login <keyfile" "$LOG/login-key"
   check "$label does not repeat the key" lacks "$KEY" "$LOG/login-key"
+  check "$label says to replace the key" grep -qF "make a new one" "$LOG/login-key"
 done
+"$CE" login --host "$URL" "--token=$KEY" </dev/null >"$LOG/login-key" 2>&1 && fail "ce login --token=<key> exited 0"
+check "an unknown option is refused without repeating its value" \
+  bash -c 'grep -qxF "ce: unknown option: --token" "$1" && ! grep -qF "$2" "$1"' _ "$LOG/login-key" "$KEY"
 # Back to the signed-in HOME the sections below build on.
 new_home stamp
 

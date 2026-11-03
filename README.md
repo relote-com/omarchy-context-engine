@@ -1,6 +1,6 @@
 # Context Engine for Omarchy
 
-One memory for every agent on your Omarchy machines. Version 0.2.4.
+One memory for every agent on your Omarchy machines. Version 0.2.5.
 
 Omarchy can launch Claude Code, Codex, OpenCode, Hermes and more from one
 keybinding, and each of them normally starts from nothing. This plugin
