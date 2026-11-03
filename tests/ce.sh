@@ -237,6 +237,51 @@ check "the key reaches curl as a header" grep -qF "authorization: Bearer $KEY" "
 check "the key is in no command line" bash -c '! grep -qF "$1" "$2"' _ "$KEY" "$LOG/argv"
 check "the key file is 0600" test "$(stat -c %a "$HOME/.config/context-engine/config")" = 600
 
+# --- every way of giving the key keeps it out of every process's argv -------
+
+# Each tool ce may run is wrapped to log its argv like the stubs do, and so is
+# ce itself: with the stubs, that is every process a sign-in starts.
+LOGGED="$WORK/logged-tools"
+mkdir -p "$LOGGED"
+for tool in "$TOOLS"/*; do
+  printf '#!/bin/bash\nprintf "%%s\\n" "%s $*" >>"$CE_TEST_LOG/argv"\nexec %q "$@"\n' \
+    "${tool##*/}" "$(readlink "$tool")" >"$LOGGED/${tool##*/}"
+done
+printf '#!/bin/bash\nprintf "%%s\\n" "ce $*" >>"$CE_TEST_LOG/argv"\nexec %q "$@"\n' "$CE" >"$LOGGED/ce"
+chmod +x "$LOGGED"/*
+printf '%s' "$KEY" >"$WORK/keyfile"
+signed_in() { grep -qxF "CE_KEY=$KEY" "$HOME/.config/context-engine/config"; }
+for way in pipe file prompt setup; do
+  new_home "argv-$way"
+  : >"$LOG/argv"
+  (
+    PATH="$STUBS:$LOGGED"
+    case $way in
+    pipe) printf '%s\n' "$KEY" | ce login --host "$URL" ;;
+    file) ce login --host "$URL" <"$WORK/keyfile" ;;
+    prompt) script -qec "ce login --host $URL" /dev/null ;;
+    setup) ce setup --yes <"$WORK/keyfile" ;;
+    esac
+  ) >"$LOG/login-$way" 2>&1
+  check "ce login by $way signs in" signed_in
+  check "ce login by $way: the wrapped tools did log their argv" grep -q "^tr " "$LOG/argv"
+  check "ce login by $way: the key is in no process's argv" bash -c '! grep -qF "$1" "$2"' _ "$KEY" "$LOG/argv"
+  check "ce login by $way: the key is not echoed" bash -c '! grep -qF "$1" "$2"' _ "$KEY" "$LOG/login-$way"
+  [[ $way == setup ]] && "$CE" uninstall >/dev/null 2>&1
+done
+
+# --key used to take the key as an argument, in ps and shell history. It is
+# refused, in either spelling, without saving or repeating it.
+for arg in "--key $KEY" "--key=$KEY"; do
+  new_home argv-key
+  # shellcheck disable=SC2086 # split on purpose: two words, or one
+  "$CE" login --host "$URL" $arg </dev/null >"$LOG/login-key" 2>&1 && fail "ce login ${arg%%[ =]*} exited 0"
+  check "ce login ${arg%%"$KEY"} is refused and saves nothing" test ! -e "$HOME/.config/context-engine/config"
+  check "ce login ${arg%%"$KEY"} points to stdin" grep -qF "ce login <keyfile" "$LOG/login-key"
+  check "ce login ${arg%%"$KEY"} does not repeat the key" bash -c '! grep -qF "$1" "$2"' _ "$KEY" "$LOG/login-key"
+done
+new_home stamp
+
 # --- what is written or searched stays off command lines --------------------
 # Arguments are readable by every account on the computer (ps). The overlay
 # hands text to ce on stdin; ce hands it on to jq and curl the same way.
