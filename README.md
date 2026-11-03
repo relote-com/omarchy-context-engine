@@ -1,6 +1,6 @@
 # Context Engine for Omarchy
 
-One memory for every agent on your Omarchy machines. Version 0.2.4.
+One memory for every agent on your Omarchy machines. Version 0.2.5.
 
 Omarchy can launch Claude Code, Codex, OpenCode, Hermes and more from one
 keybinding, and each of them normally starts from nothing. This plugin
@@ -26,7 +26,11 @@ omarchy plugin add https://github.com/relote-com/omarchy-context-engine.git --en
 
 Both ask before they change anything. From a script, with no terminal to
 ask in, add `--yes` to each: `omarchy plugin add … --enable --yes`, then
-`ce setup --yes <keyfile` with the key in a file.
+`ce setup --yes <keyfile` with the key in a file. `ce login` takes the key
+the same way (`ce login <keyfile`, or piped in) or at its prompt, never as an
+argument, where `ps` and shell history would show it; `ce login --key`, which
+did that until 0.2.4, now stops with a pointer to stdin. If you used it, make
+a new key and delete the old one: it is still in your shell history.
 
 It needs `curl`, `jq` and `gum`, which Omarchy already ships, and uses
 `notify-send` and `xdg-open` when they are there. The agents it connects

@@ -262,22 +262,31 @@ engine_for_write() {
 }
 
 cmd_login() {
-  local key="" engine="" host=""
+  local key engine="" host="" arg exposed=""
+  # A key (ce_…) typed among the arguments is already in shell history: every
+  # refusal below then says to replace it.
+  for arg; do
+    [[ $arg == ce_* || $arg == *=ce_* ]] &&
+      exposed=$'\nce: that key is now in your shell history: make a new key, delete this one under AI tools, and remove the line from your history'
+  done
   while (($#)); do
     case "$1" in
-    --key) key=${2:?--key needs a value}; shift 2 ;;
     --engine) engine=${2:?--engine needs a value}; shift 2 ;;
     --host) host=${2:?--host needs a value}; shift 2 ;;
-    *) die "unexpected argument: $1" ;;
+    # The key never comes from an argument: every account sees those in ps,
+    # and they stay in shell history. None of these repeat what was given.
+    --key | --key=*) die "--key is gone: it showed the key in ps. Give it on stdin: ce login <keyfile$exposed" ;;
+    -*) die "unknown option: ${1%%=*}$exposed" ;;
+    *) die "ce login takes the key on stdin, not as an argument: ce login <keyfile$exposed" ;;
     esac
   done
 
   [[ -n $host ]] && CE_HOST=${host%/}
 
   # A key piped in (ce login <keyfile) stays off the command line.
-  if [[ -z $key && ! -t 0 ]]; then
+  if [[ ! -t 0 ]]; then
     key=$(cat)
-  elif [[ -z $key ]]; then
+  else
     interactive || die "pipe the key in (ce login <keyfile), or run ce login in a terminal"
     cat <<EOF
 

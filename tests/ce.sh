@@ -24,6 +24,7 @@ trap 'rm -rf "$WORK"' EXIT
 STUBS="$WORK/stubs"
 LOG="$WORK/log"
 mkdir -p "$STUBS" "$LOG"
+printf '%s' "$KEY" >"$WORK/keyfile"
 
 failures=0
 pass() { echo "ok   $*"; }
@@ -36,6 +37,8 @@ check() {
   shift
   if "$@" >/dev/null; then pass "$name"; else fail "$name"; fi
 }
+# lacks <text> <file>: the file does not hold the text.
+lacks() { ! grep -qF "$1" "$2"; }
 
 # --- stubs --------------------------------------------------------------------
 
@@ -171,7 +174,6 @@ new_home() {
 }
 
 login() {
-  printf '%s' "$KEY" >"$WORK/keyfile"
   "$CE" login --host "$URL" <"$WORK/keyfile" >/dev/null
 }
 
@@ -236,6 +238,63 @@ login
 check "the key reaches curl as a header" grep -qF "authorization: Bearer $KEY" "$LOG/headers"
 check "the key is in no command line" bash -c '! grep -qF "$1" "$2"' _ "$KEY" "$LOG/argv"
 check "the key file is 0600" test "$(stat -c %a "$HOME/.config/context-engine/config")" = 600
+
+# --- every way of giving the key keeps it out of every process's argv -------
+
+# Each real tool ce may run is wrapped to log its argv like the stubs do: with
+# the stubs, that is every process a sign-in starts.
+LOGGED="$WORK/logged-tools"
+mkdir -p "$LOGGED"
+for tool in "$TOOLS"/*; do
+  printf '#!/bin/bash\nprintf "%%s\\n" "%s $*" >>"$CE_TEST_LOG/argv"\nexec %q "$@"\n' \
+    "${tool##*/}" "$(readlink "$tool")" >"$LOGGED/${tool##*/}"
+done
+chmod +x "$LOGGED"/*
+for way in pipe file prompt setup; do
+  new_home "argv-$way"
+  : >"$LOG/argv"
+  : >"$LOG/jq-argv"
+  (
+    PATH="$STUBS:$LOGGED"
+    case $way in
+    pipe) printf '%s\n' "$KEY" | "$CE" login --host "$URL" ;;
+    file) "$CE" login --host "$URL" <"$WORK/keyfile" ;;
+    prompt) script -qec "$(printf '%q ' "$CE" login --host "$URL")" /dev/null ;;
+    setup) "$CE" setup --yes <"$WORK/keyfile" ;;
+    esac
+  ) >"$LOG/login-$way" 2>&1
+  check "sign-in by $way works" grep -qxF "CE_KEY=$KEY" "$HOME/.config/context-engine/config"
+  check "sign-in by $way: argv was logged (the key reached the engine)" grep -q "^-sS " "$LOG/argv"
+  check "sign-in by $way: the key is in no process's argv" lacks "$KEY" <(cat "$LOG/argv" "$LOG/jq-argv")
+  check "sign-in by $way: the key is not echoed" lacks "$KEY" "$LOG/login-$way"
+done
+
+# --key used to take the key as an argument, in ps and shell history. It is
+# refused, in either spelling, as is a bare key, without saving or repeating
+# it, and with word to replace it.
+for arg in "--key $KEY" "--key=$KEY" "$KEY"; do
+  new_home argv-key
+  label="ce login ${arg%%"$KEY"}<key>"
+  # shellcheck disable=SC2086 # split on purpose: two words, or one
+  "$CE" login --host "$URL" $arg </dev/null >"$LOG/login-key" 2>&1 && fail "$label exited 0"
+  check "$label is refused and saves nothing" test ! -e "$HOME/.config/context-engine/config"
+  check "$label points to stdin" grep -qF "ce login <keyfile" "$LOG/login-key"
+  check "$label does not repeat the key" lacks "$KEY" "$LOG/login-key"
+  check "$label says to replace the key" grep -qF "make a new key" "$LOG/login-key"
+done
+for arg in "--token=$KEY" "--token $KEY"; do
+  new_home argv-token
+  # shellcheck disable=SC2086 # split on purpose
+  "$CE" login --host "$URL" $arg </dev/null >"$LOG/login-key" 2>&1 && fail "ce login --token <key> exited 0"
+  check "an unknown option with a key is refused, saves nothing, says to replace the key and does not repeat it" \
+    bash -c 'grep -qF "ce: unknown option: --token" "$1" && grep -qF "make a new key" "$1" && ! grep -qF "$2" "$1" && ! test -e "$3"' \
+    _ "$LOG/login-key" "$KEY" "$HOME/.config/context-engine/config"
+done
+new_home argv-word
+"$CE" login --host "$URL" --key </dev/null >"$LOG/login-key" 2>&1
+check "a refusal with no key typed does not say to replace one" lacks "make a new key" "$LOG/login-key"
+# Back to the signed-in HOME the sections below build on.
+new_home stamp
 
 # --- what is written or searched stays off command lines --------------------
 # Arguments are readable by every account on the computer (ps). The overlay
