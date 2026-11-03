@@ -98,13 +98,17 @@ codex_disconnect() { codex_strip; }
 
 # json_set <file> <jq filter>: the filter sees $name, $url and env.CE_AUTH.
 json_set() {
-  local file=$1 filter=$2
-  if [[ -f $file ]] && ! jq -e . "$file" >/dev/null 2>&1; then
-    echo "  $file has comments or is not plain JSON; add the server by hand:" >&2
-    CE_AUTH="Bearer $KEY_HINT" jq -n --arg name "$SERVER_NAME" --arg url "$(mcp_url)" "{} | $filter" >&2
-    return 1
-  fi
-  secret_write "$file" json_with_key "$filter" "$file"
+  json_plain "$1" "$2" || return 1
+  secret_write "$1" json_with_key "$2" "$1"
+}
+
+# json_plain <file> <jq filter>: ce can edit the file (absent counts), or it
+# says what to add by hand, with a placeholder for the key.
+json_plain() {
+  [[ -f $1 ]] && ! jq -e . "$1" >/dev/null 2>&1 || return 0
+  echo "  $1 has comments or is not plain JSON; add the server by hand:" >&2
+  CE_AUTH="Bearer $KEY_HINT" jq -n --arg name "$SERVER_NAME" --arg url "$(mcp_url)" "{} | $2" >&2
+  return 1
 }
 
 # The key goes to jq through its environment, which ps does not show. A file
@@ -177,9 +181,13 @@ GEMINI_CONFIG="$GEMINI_DIR/settings.json"
 
 gemini_connected() { json_has "$GEMINI_CONFIG" mcpServers; }
 
+GEMINI_FILTER='.mcpServers[$name] = {httpUrl: $url, headers: {Authorization: env.CE_AUTH}}'
+
+# The folder is left alone when ce cannot edit the file.
 gemini_connect() {
+  json_plain "$GEMINI_CONFIG" "$GEMINI_FILTER" || return 1
   private_dir "$GEMINI_DIR"
-  json_set "$GEMINI_CONFIG" '.mcpServers[$name] = {httpUrl: $url, headers: {Authorization: env.CE_AUTH}}'
+  json_set "$GEMINI_CONFIG" "$GEMINI_FILTER"
 }
 
 gemini_disconnect() { json_del "$GEMINI_CONFIG" mcpServers; }

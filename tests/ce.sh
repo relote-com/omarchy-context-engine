@@ -487,6 +487,24 @@ check "uninstall takes the key out of Gemini's saved settings, keeps its change,
   bash -c 'jq -e ".ui.theme == \"GitHub\" and (has(\"mcpServers\") | not)" "$1/settings.json" && [[ $(stat -c %a "$1") == 755 ]]' \
   _ "$HOME/.gemini"
 
+# --- ~/.gemini: only changed when ce writes to it ----------------------------
+
+new_home gemini-folder
+umask 022
+mkdir -p "$HOME/.gemini"
+printf '{\n  // mine\n  "ui": {}\n}\n' >"$HOME/.gemini/settings.json"
+login
+"$CE" connect gemini >/dev/null 2>&1 && fail "ce connect gemini on a commented settings.json exited 0"
+check "a settings.json ce cannot edit leaves ~/.gemini as it was" test "$(mode_of "$HOME/.gemini")" = 755
+new_home gemini-made
+umask 022
+login
+"$CE" connect gemini >/dev/null 2>&1 || fail "ce connect gemini exited $?"
+touch "$HOME/.gemini/oauth_creds.json"
+"$CE" uninstall >/dev/null 2>&1
+check "a ~/.gemini ce made, that Gemini filled since, gets the umask's mode back" \
+  test "$(mode_of "$HOME/.gemini")" = 755
+
 # --- a config jq cannot change -----------------------------------------------
 
 new_home odd
