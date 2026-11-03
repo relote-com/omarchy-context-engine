@@ -91,7 +91,7 @@ end_line() {
 
 # appended <file>: the file as it is, its last line ended, then stdin.
 appended() {
-  [[ -f $1 ]] && cat "$1"
+  if [[ -f $1 ]]; then cat "$1" || return 1; fi
   unended "$1" && echo
   cat
 }
@@ -133,7 +133,7 @@ mkdirs() {
     dir=$(dirname "$dir")
   done
   ((${#missing[@]})) || return 0
-  mkdir -p "$1"
+  mkdir -p "$1" || return 1
   [[ $1 == "$CONFIG_DIR" ]] && chmod 700 "$CONFIG_DIR"
   for dir in "${missing[@]}"; do remember "made $dir"; done
 }
