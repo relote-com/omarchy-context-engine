@@ -80,18 +80,19 @@ without_line() {
   ((status <= 1))
 }
 
+# unended <file>: its last line has no newline.
+unended() { [[ -s $1 && $(tail -c1 "$1") != "" ]]; }
+
 # end_line <file>: before appending, make sure the last line is ended.
 end_line() {
-  [[ -s $1 && $(tail -c1 "$1") != "" ]] && echo >>"$1"
+  unended "$1" && echo >>"$1"
   return 0
 }
 
 # appended <file>: the file as it is, its last line ended, then stdin.
 appended() {
-  if [[ -s $1 ]]; then
-    cat "$1"
-    [[ $(tail -c1 "$1") == "" ]] || echo
-  fi
+  [[ -f $1 ]] && cat "$1"
+  unended "$1" && echo
   cat
 }
 
@@ -163,7 +164,7 @@ secret_write() {
   keep_mode "$file"
   target=$(readlink -f "$file") || return 1
   tmp=$(mktemp "$target.XXXXXX") || return 1
-  "$@" >"$tmp" && mv -f "$tmp" "$target" && return 0
+  "$@" >"$tmp" && mv -fT "$tmp" "$target" && return 0
   rm -f "$tmp"
   return 1
 }
@@ -176,11 +177,12 @@ private_dir() {
     keep_mode "$1"
     chmod 700 "$1"
   else
-    remember "mode $1 $(printf '%o' $((0777 & ~$(umask))))"
+    local mode
+    mode=$(printf '%o' $((0777 & ~$(umask))))
     (
       umask 077
       mkdirs "$1"
-    )
+    ) && remember "mode $1 $mode"
   fi
 }
 

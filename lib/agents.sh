@@ -186,7 +186,7 @@ GEMINI_FILTER='.mcpServers[$name] = {httpUrl: $url, headers: {Authorization: env
 # The folder is left alone when ce cannot edit the file.
 gemini_connect() {
   json_plain "$GEMINI_CONFIG" "$GEMINI_FILTER" || return 1
-  private_dir "$GEMINI_DIR"
+  private_dir "$GEMINI_DIR" || return 1
   json_set "$GEMINI_CONFIG" "$GEMINI_FILTER"
 }
 

@@ -466,6 +466,16 @@ done
 check "~/.gemini: created 0700" test "$(mode_of "$HOME/.gemini")" = 700
 "$CE" uninstall >/dev/null 2>&1
 
+# A config that cannot be replaced: no copy of it, key and all, is left beside it.
+new_home no-rename
+mkdir -p "$HOME/.cursor" "$WORK/no-mv"
+printf '#!/bin/bash\nexit 1\n' >"$WORK/no-mv/mv"
+chmod +x "$WORK/no-mv/mv"
+login
+PATH="$WORK/no-mv:$PATH" "$CE" connect cursor >/dev/null 2>&1 && fail "ce connect with a failing rename exited 0"
+check "a failed rename leaves no staging file with the key" \
+  bash -c '! grep -rqF "$1" "$2"' _ "$KEY" "$HOME/.cursor"
+
 # --- Gemini CLI saving its own settings after connect ------------------------
 # Gemini CLI 0.66.0 saves settings.json by writing a new file next to it (mode
 # from the umask) and renaming it over the old one, our header included.
@@ -495,7 +505,8 @@ mkdir -p "$HOME/.gemini"
 printf '{\n  // mine\n  "ui": {}\n}\n' >"$HOME/.gemini/settings.json"
 login
 "$CE" connect gemini >/dev/null 2>&1 && fail "ce connect gemini on a commented settings.json exited 0"
-check "a settings.json ce cannot edit leaves ~/.gemini as it was" test "$(mode_of "$HOME/.gemini")" = 755
+check "a settings.json ce cannot edit leaves ~/.gemini as it was, and unrecorded" \
+  bash -c '[[ $(stat -c %a "$1") == 755 ]] && ! grep -qF "$1" "$2"' _ "$HOME/.gemini" "$HOME/.config/context-engine/installed"
 new_home gemini-made
 umask 022
 login
