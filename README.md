@@ -50,6 +50,10 @@ wires up the ones you have.
 
 Not set up yet? Click the dimmed brain icon in the bar and it opens setup.
 
+After updating from 0.2.3 or earlier, run `ce setup` again so existing agent
+configs get the new protection; if you used Gemini CLI on a computer other
+people log in to, rotate your key.
+
 ## Remove
 
 ```bash
