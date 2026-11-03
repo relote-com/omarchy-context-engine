@@ -403,6 +403,119 @@ after=$(tree_of)
 check "ce uninstall leaves a lived-in HOME exactly as before" test "$before" = "$after"
 [[ $before == "$after" ]] || diff <(echo "$before") <(echo "$after")
 
+# --- the key never sits in a file another account can read -------------------
+
+mode_of() { stat -c %a "$1"; }
+# private_with_key <file>: the file is 0600 and holds the key.
+private_with_key() { [[ $(mode_of "$1") == 600 ]] && grep -qF "$KEY" "$1"; }
+
+# umask 022 and configs the person already has at 0644, in folders anyone can
+# enter. Another account that opened a config while it was 0644 keeps reading
+# it through that descriptor whatever its mode becomes, so the key has to go
+# into a new file that was never readable, not into the old one.
+
+new_home exposed
+umask 022
+mkdir -p "$HOME/.codex" "$HOME/.config/opencode" "$HOME/.cursor" "$HOME/.gemini" "$HOME/.hermes"
+printf 'model = "gpt"\n' >"$HOME/.codex/config.toml"
+jq . <<<'{"theme":"dark"}' >"$HOME/.config/opencode/opencode.json"
+jq . <<<'{"mcpServers":{"other":{"url":"https://other.example/mcp"}}}' >"$HOME/.cursor/mcp.json"
+jq . <<<'{"ui":{"theme":"Dracula"}}' >"$HOME/.gemini/settings.json"
+printf 'model: hermes\n' >"$HOME/.hermes/config.yaml"
+secret_files=(.codex/config.toml .config/opencode/opencode.json .cursor/mcp.json .gemini/settings.json .hermes/config.yaml)
+before=$(tree_of)
+login
+opened=()
+for file in "${secret_files[@]}"; do
+  exec {fd}<"$HOME/$file"
+  opened+=("$fd")
+done
+"$CE" connect >"$LOG/connect-exposed" 2>&1 || fail "ce connect exited $?"
+for i in "${!secret_files[@]}"; do
+  file=${secret_files[$i]} fd=${opened[$i]}
+  check "$file: an account that opened it at 0644 cannot read the key" \
+    bash -c '! grep -qF "$1"' _ "$KEY" <&"$fd"
+  exec {fd}<&-
+  check "$file: holds the key at 0600" private_with_key "$HOME/$file"
+done
+check "the person's settings stay in every config" \
+  bash -c 'grep -qxF "model = \"gpt\"" "$1/.codex/config.toml" && grep -qxF "model: hermes" "$1/.hermes/config.yaml" &&
+    jq -e ".theme == \"dark\"" "$1/.config/opencode/opencode.json" && jq -e ".mcpServers.other" "$1/.cursor/mcp.json" &&
+    jq -e ".ui.theme == \"Dracula\"" "$1/.gemini/settings.json"' _ "$HOME"
+check "~/.gemini is 0700, since Gemini CLI rewrites its settings at 0644" \
+  test "$(mode_of "$HOME/.gemini")" = 700
+"$CE" uninstall >"$LOG/uninstall-exposed" 2>&1 || fail "ce uninstall exited $?"
+after=$(tree_of)
+check "ce uninstall puts every mode back, ~/.gemini's too" test "$before" = "$after"
+[[ $before == "$after" ]] || diff <(echo "$before") <(echo "$after")
+
+# --- new configs are private from their first open ---------------------------
+# chmod does nothing here: a config made world-readable and tightened only
+# afterwards stays 0644, so it shows.
+
+new_home first-open
+umask 022
+mkdir -p "$HOME/.cursor" "$WORK/no-chmod"
+printf '#!/bin/bash\nexit 0\n' >"$WORK/no-chmod/chmod"
+chmod +x "$WORK/no-chmod/chmod"
+login
+PATH="$WORK/no-chmod:$PATH" "$CE" connect >"$LOG/connect-first-open" 2>&1 || fail "ce connect exited $?"
+for file in "${secret_files[@]}"; do
+  check "$file: created 0600 under umask 022" private_with_key "$HOME/$file"
+done
+check "~/.gemini: created 0700" test "$(mode_of "$HOME/.gemini")" = 700
+"$CE" uninstall >/dev/null 2>&1
+
+# A config that cannot be replaced: no copy of it, key and all, is left beside it.
+new_home no-rename
+mkdir -p "$HOME/.cursor" "$WORK/no-mv"
+printf '#!/bin/bash\nexit 1\n' >"$WORK/no-mv/mv"
+chmod +x "$WORK/no-mv/mv"
+login
+PATH="$WORK/no-mv:$PATH" "$CE" connect cursor >/dev/null 2>&1 && fail "ce connect with a failing rename exited 0"
+check "a failed rename leaves no staging file with the key" \
+  bash -c '! grep -rqF "$1" "$2"' _ "$KEY" "$HOME/.cursor"
+
+# --- Gemini CLI saving its own settings after connect ------------------------
+# Gemini CLI 0.66.0 saves settings.json by writing a new file next to it (mode
+# from the umask) and renaming it over the old one, our header included.
+
+new_home gemini-save
+umask 022
+mkdir -p "$HOME/.gemini"
+jq . <<<'{"ui":{"theme":"Dracula"}}' >"$HOME/.gemini/settings.json"
+login
+"$CE" connect gemini >/dev/null 2>&1 || fail "ce connect gemini exited $?"
+staged="$HOME/.gemini/.settings.json.4242.1762189200000.0.tmp"
+jq '.ui.theme = "GitHub"' "$HOME/.gemini/settings.json" >"$staged"
+mv "$staged" "$HOME/.gemini/settings.json"
+check "after Gemini saves, its 0644 settings with the key sit in a folder only you can enter" \
+  bash -c '[[ $(stat -c %a "$1/settings.json") == 644 && $(stat -c %a "$1") == 700 ]] && grep -qF "$2" "$1/settings.json"' \
+  _ "$HOME/.gemini" "$KEY"
+"$CE" uninstall >/dev/null 2>&1 || fail "ce uninstall exited $?"
+check "uninstall takes the key out of Gemini's saved settings, keeps its change, and reopens ~/.gemini" \
+  bash -c 'jq -e ".ui.theme == \"GitHub\" and (has(\"mcpServers\") | not)" "$1/settings.json" && [[ $(stat -c %a "$1") == 755 ]]' \
+  _ "$HOME/.gemini"
+
+# --- ~/.gemini: only changed when ce writes to it ----------------------------
+
+new_home gemini-folder
+umask 022
+mkdir -p "$HOME/.gemini"
+printf '{\n  // mine\n  "ui": {}\n}\n' >"$HOME/.gemini/settings.json"
+login
+"$CE" connect gemini >/dev/null 2>&1 && fail "ce connect gemini on a commented settings.json exited 0"
+check "a settings.json ce cannot edit leaves ~/.gemini as it was, and unrecorded" \
+  bash -c '[[ $(stat -c %a "$1") == 755 ]] && ! grep -qF "$1" "$2"' _ "$HOME/.gemini" "$HOME/.config/context-engine/installed"
+new_home gemini-made
+umask 022
+login
+"$CE" connect gemini >/dev/null 2>&1 || fail "ce connect gemini exited $?"
+touch "$HOME/.gemini/oauth_creds.json"
+"$CE" uninstall >/dev/null 2>&1
+check "a ~/.gemini ce made, that Gemini filled since, gets the umask's mode back" \
+  test "$(mode_of "$HOME/.gemini")" = 755
+
 # --- a config jq cannot change -----------------------------------------------
 
 new_home odd

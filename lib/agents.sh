@@ -6,6 +6,13 @@
 # its own user-only config, in the format that agent documents (checked
 # 2026-10-31; the sources are named per agent below).
 #
+# A config that gets the key is written whole into a new 0600 file and renamed
+# over the old one (secret_write), never written in place and tightened after.
+# Codex, OpenCode and Hermes save their own configs the same way, through a
+# 0600 temporary file (checked 2026-11-03: codex-rs write_atomically uses
+# tempfile's NamedTempFile; opencode's config writer passes mode 0o600; Hermes
+# atomic_yaml_write uses mkstemp). Gemini CLI does not: see gemini_connect.
+#
 # The key never goes on a command line, where ps would show it: config files
 # are written from the environment or a heredoc, and Claude Code asks
 # `ce mcp-headers` for it on each connection.
@@ -75,18 +82,14 @@ codex_strip() {
 codex_connected() { grep -qxF "[mcp_servers.$SERVER_NAME]" "$CODEX_CONFIG" 2>/dev/null; }
 
 codex_connect() {
-  new_file "$CODEX_CONFIG"
-  keep_mode "$CODEX_CONFIG"
   codex_strip || return 1
-  end_line "$CODEX_CONFIG"
-  cat >>"$CODEX_CONFIG" <<EOF
+  secret_write "$CODEX_CONFIG" appended "$CODEX_CONFIG" <<EOF
 $CODEX_BEGIN
 [mcp_servers.$SERVER_NAME]
 url = "$(mcp_url)"
 http_headers = { "Authorization" = "Bearer $CE_KEY" }
 $CODEX_END
 EOF
-  chmod 600 "$CODEX_CONFIG"
 }
 
 codex_disconnect() { codex_strip; }
@@ -95,24 +98,25 @@ codex_disconnect() { codex_strip; }
 
 # json_set <file> <jq filter>: the filter sees $name, $url and env.CE_AUTH.
 json_set() {
-  local file=$1 filter=$2
-  if [[ ! -f $file ]]; then
-    new_file "$file"
-    echo '{}' >"$file"
-  fi
-  if ! jq -e . "$file" >/dev/null 2>&1; then
-    echo "  $file has comments or is not plain JSON; add the server by hand:" >&2
-    CE_AUTH="Bearer $KEY_HINT" jq -n --arg name "$SERVER_NAME" --arg url "$(mcp_url)" "{} | $filter" >&2
-    return 1
-  fi
-  keep_mode "$file"
-  rewrite "$file" json_with_key "$filter" "$file" || return 1
-  chmod 600 "$file"
+  json_plain "$1" "$2" || return 1
+  secret_write "$1" json_with_key "$2" "$1"
 }
 
-# The key goes to jq through its environment, which ps does not show.
+# json_plain <file> <jq filter>: ce can edit the file (absent counts), or it
+# says what to add by hand, with a placeholder for the key.
+json_plain() {
+  [[ -f $1 ]] && ! jq -e . "$1" >/dev/null 2>&1 || return 0
+  echo "  $1 has comments or is not plain JSON; add the server by hand:" >&2
+  CE_AUTH="Bearer $KEY_HINT" jq -n --arg name "$SERVER_NAME" --arg url "$(mcp_url)" "{} | $2" >&2
+  return 1
+}
+
+# The key goes to jq through its environment, which ps does not show. A file
+# not there yet counts as {}.
 json_with_key() {
-  CE_AUTH="Bearer $CE_KEY" jq --arg name "$SERVER_NAME" --arg url "$(mcp_url)" "$1" "$2"
+  local filter=$1
+  [[ -f $2 ]] || set -- -n "{} | $filter"
+  CE_AUTH="Bearer $CE_KEY" jq --arg name "$SERVER_NAME" --arg url "$(mcp_url)" "$@"
 }
 
 # json_has <file> <key>: the file has our server under that key.
@@ -160,12 +164,30 @@ cursor_disconnect() { json_del "$CURSOR_CONFIG" mcpServers; }
 # ~/.gemini/settings.json, mcpServers.<name> = {httpUrl, headers}; httpUrl is
 # streamable HTTP (url would mean SSE). Written directly because
 # `gemini mcp add -H` would put the key on its command line.
-GEMINI_CONFIG="$HOME/.gemini/settings.json"
+#
+# Gemini CLI saves settings.json whole on any settings change (saveSettings,
+# packages/cli/src/config/settings.ts), through a new file made with the
+# umask's mode and renamed over it (writeAtomicSync,
+# packages/cli/src/utils/commentJson.ts), so our 0600 becomes 0644 with the
+# key still in it. It has no other place for the key: an MCP server takes
+# literal headers, OAuth or Google credentials, no helper command or token
+# file (MCPServerConfig, packages/core/src/config/config.ts), and a ${VAR} in
+# settings is read from ~/.gemini/.env only when no project .env comes first
+# (findEnvFile). All checked in v0.66.0, 2026-11-03. So ~/.gemini itself is
+# made 0700: whatever mode Gemini gives the file, no other account can reach
+# it. ce uninstall puts the folder's mode back.
+GEMINI_DIR="$HOME/.gemini"
+GEMINI_CONFIG="$GEMINI_DIR/settings.json"
 
 gemini_connected() { json_has "$GEMINI_CONFIG" mcpServers; }
 
+GEMINI_FILTER='.mcpServers[$name] = {httpUrl: $url, headers: {Authorization: env.CE_AUTH}}'
+
+# The folder is left alone when ce cannot edit the file.
 gemini_connect() {
-  json_set "$GEMINI_CONFIG" '.mcpServers[$name] = {httpUrl: $url, headers: {Authorization: env.CE_AUTH}}'
+  json_plain "$GEMINI_CONFIG" "$GEMINI_FILTER" || return 1
+  private_dir "$GEMINI_DIR" || return 1
+  json_set "$GEMINI_CONFIG" "$GEMINI_FILTER"
 }
 
 gemini_disconnect() { json_del "$GEMINI_CONFIG" mcpServers; }
@@ -197,10 +219,7 @@ hermes_connect() {
 EOF
     return 1
   fi
-  new_file "$HERMES_CONFIG"
-  keep_mode "$HERMES_CONFIG"
-  end_line "$HERMES_CONFIG"
-  cat >>"$HERMES_CONFIG" <<EOF
+  secret_write "$HERMES_CONFIG" appended "$HERMES_CONFIG" <<EOF
 $HERMES_BEGIN
 mcp_servers:
   $SERVER_NAME:
@@ -209,7 +228,6 @@ mcp_servers:
       Authorization: "Bearer $CE_KEY"
 $HERMES_END
 EOF
-  chmod 600 "$HERMES_CONFIG"
 }
 
 hermes_disconnect() { hermes_strip; }

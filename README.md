@@ -1,6 +1,6 @@
 # Context Engine for Omarchy
 
-One memory for every agent on your Omarchy machines. Version 0.2.3.
+One memory for every agent on your Omarchy machines. Version 0.2.4.
 
 Omarchy can launch Claude Code, Codex, OpenCode, Hermes and more from one
 keybinding, and each of them normally starts from nothing. This plugin
@@ -115,7 +115,7 @@ Everything outside the plugin folder is written by `ce setup` (or
 | `~/.codex/config.toml` | `[mcp_servers.context-engine]` `url`, `http_headers`, between marker comments |
 | `~/.config/opencode/opencode.json` | `mcp.context-engine`: `type: remote`, `url`, `headers` |
 | `~/.cursor/mcp.json` | `mcpServers.context-engine`: `url`, `headers` |
-| `~/.gemini/settings.json` | `mcpServers.context-engine`: `httpUrl`, `headers` |
+| `~/.gemini/settings.json` | `mcpServers.context-engine`: `httpUrl`, `headers`; the `~/.gemini` folder is set to mode 700 (see below) |
 | `~/.hermes/config.yaml` | `mcp_servers.context-engine`: `url`, `headers`, between marker comments |
 | `~/.agents/skills`, `~/.claude/skills`, … | `context-engine` skill symlink |
 | `~/.config/omarchy/extensions/omarchy-menu.jsonc` | Menu rows between marker comments |
@@ -126,8 +126,13 @@ Everything outside the plugin folder is written by `ce setup` (or
 Every agent reaches `https://app.contextengine.com/mcp` with the same key as
 a Bearer header, and the key decides which engines they reach. Claude Code
 asks `ce mcp-headers` for it on each connection, so its config holds no copy;
-the other agents keep a copy in their own config, which `ce` sets to mode
-600. The key never goes on a command line. Writes are credited to you. To
+the other agents keep a copy in their own config. `ce` writes that config
+whole into a new mode 600 file and swaps it in, so the key is never in a file
+another account can read, even one it opened earlier. Codex, OpenCode and
+Hermes save their configs the same way. Gemini CLI saves `settings.json` at
+mode 644 whenever you change a setting, so `ce` makes `~/.gemini` itself mode
+700, and no other account can reach the file. `ce uninstall` puts back every
+mode it changed. The key never goes on a command line. Writes are credited to you. To
 give agents read-only access, make a key with *Can read* and run `ce login`
 again.
 
