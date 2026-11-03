@@ -261,20 +261,23 @@ engine_for_write() {
   echo "$engine"
 }
 
-# What to do about a key already typed on a command line.
-EXPOSED=$'\nce: a key typed there is in your shell history: make a new one and delete that one.'
-
 cmd_login() {
-  local key engine="" host=""
+  local key engine="" host="" arg exposed=""
+  # A key (ce_…) typed among the arguments is already in shell history: every
+  # refusal below then says to replace it.
+  for arg; do
+    [[ $arg == ce_* || $arg == *=ce_* ]] &&
+      exposed=$'\nce: that key is now in your shell history: make a new key, delete this one in the engine, and remove the line from your history'
+  done
   while (($#)); do
     case "$1" in
     --engine) engine=${2:?--engine needs a value}; shift 2 ;;
     --host) host=${2:?--host needs a value}; shift 2 ;;
     # The key never comes from an argument: every account sees those in ps,
     # and they stay in shell history. None of these repeat what was given.
-    --key | --key=*) die "--key is gone: it showed the key in ps. Give it on stdin: ce login <keyfile$EXPOSED" ;;
-    -*) die "unknown option: ${1%%=*}" ;;
-    *) die "ce login takes the key on stdin, not as an argument: ce login <keyfile$EXPOSED" ;;
+    --key | --key=*) die "--key is gone: it showed the key in ps. Give it on stdin: ce login <keyfile$exposed" ;;
+    -*) die "unknown option: ${1%%=*}$exposed" ;;
+    *) die "ce login takes the key on stdin, not as an argument: ce login <keyfile$exposed" ;;
     esac
   done
 

@@ -280,11 +280,19 @@ for arg in "--key $KEY" "--key=$KEY" "$KEY"; do
   check "$label is refused and saves nothing" test ! -e "$HOME/.config/context-engine/config"
   check "$label points to stdin" grep -qF "ce login <keyfile" "$LOG/login-key"
   check "$label does not repeat the key" lacks "$KEY" "$LOG/login-key"
-  check "$label says to replace the key" grep -qF "make a new one" "$LOG/login-key"
+  check "$label says to replace the key" grep -qF "make a new key" "$LOG/login-key"
 done
-"$CE" login --host "$URL" "--token=$KEY" </dev/null >"$LOG/login-key" 2>&1 && fail "ce login --token=<key> exited 0"
-check "an unknown option is refused without repeating its value" \
-  bash -c 'grep -qxF "ce: unknown option: --token" "$1" && ! grep -qF "$2" "$1"' _ "$LOG/login-key" "$KEY"
+for arg in "--token=$KEY" "--token $KEY"; do
+  new_home argv-token
+  # shellcheck disable=SC2086 # split on purpose
+  "$CE" login --host "$URL" $arg </dev/null >"$LOG/login-key" 2>&1 && fail "ce login --token <key> exited 0"
+  check "an unknown option with a key is refused, saves nothing, says to replace the key and does not repeat it" \
+    bash -c 'grep -qF "ce: unknown option: --token" "$1" && grep -qF "make a new key" "$1" && ! grep -qF "$2" "$1" && ! test -e "$3"' \
+    _ "$LOG/login-key" "$KEY" "$HOME/.config/context-engine/config"
+done
+new_home argv-word
+"$CE" login --host "$URL" --key </dev/null >"$LOG/login-key" 2>&1
+check "a refusal with no key typed does not say to replace one" lacks "make a new key" "$LOG/login-key"
 # Back to the signed-in HOME the sections below build on.
 new_home stamp
 
