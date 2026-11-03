@@ -110,9 +110,9 @@ json_set() {
 # The key goes to jq through its environment, which ps does not show. A file
 # not there yet counts as {}.
 json_with_key() {
-  local input='{}'
-  [[ -f $2 ]] && input=$(cat "$2")
-  CE_AUTH="Bearer $CE_KEY" jq --arg name "$SERVER_NAME" --arg url "$(mcp_url)" "$1" <<<"$input"
+  local filter=$1
+  [[ -f $2 ]] || set -- -n "{} | $filter"
+  CE_AUTH="Bearer $CE_KEY" jq --arg name "$SERVER_NAME" --arg url "$(mcp_url)" "$@"
 }
 
 # json_has <file> <key>: the file has our server under that key.

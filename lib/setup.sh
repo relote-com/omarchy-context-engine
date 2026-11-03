@@ -120,8 +120,7 @@ o.bind("SUPER + ALT + M", "Context Engine: remember", "omarchy-shell shell toggl
 EOF
   # One line at the end, removed again by ce uninstall.
   if [[ -f $HYPR_MAIN ]] && ! grep -qF 'require("hypr.context_engine")' "$HYPR_MAIN"; then
-    end_line "$HYPR_MAIN"
-    printf '%s\n' "$HYPR_REQUIRE" >>"$HYPR_MAIN"
+    rewrite "$HYPR_MAIN" appended "$HYPR_MAIN" <<<"$HYPR_REQUIRE"
   fi
   if command -v hyprctl >/dev/null && [[ -n ${HYPRLAND_INSTANCE_SIGNATURE:-} ]]; then
     hyprctl reload >/dev/null 2>&1 || true

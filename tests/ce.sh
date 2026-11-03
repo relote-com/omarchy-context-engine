@@ -404,6 +404,11 @@ check "ce uninstall leaves a lived-in HOME exactly as before" test "$before" = "
 [[ $before == "$after" ]] || diff <(echo "$before") <(echo "$after")
 
 # --- the key never sits in a file another account can read -------------------
+
+mode_of() { stat -c %a "$1"; }
+# private_with_key <file>: the file is 0600 and holds the key.
+private_with_key() { [[ $(mode_of "$1") == 600 ]] && grep -qF "$KEY" "$1"; }
+
 # umask 022 and configs the person already has at 0644, in folders anyone can
 # enter. Another account that opened a config while it was 0644 keeps reading
 # it through that descriptor whatever its mode becomes, so the key has to go
@@ -431,15 +436,14 @@ for i in "${!secret_files[@]}"; do
   check "$file: an account that opened it at 0644 cannot read the key" \
     bash -c '! grep -qF "$1"' _ "$KEY" <&"$fd"
   exec {fd}<&-
-  check "$file: holds the key at 0600" \
-    bash -c '[[ $(stat -c %a "$1") == 600 ]] && grep -qF "$2" "$1"' _ "$HOME/$file" "$KEY"
+  check "$file: holds the key at 0600" private_with_key "$HOME/$file"
 done
 check "the person's settings stay in every config" \
   bash -c 'grep -qxF "model = \"gpt\"" "$1/.codex/config.toml" && grep -qxF "model: hermes" "$1/.hermes/config.yaml" &&
     jq -e ".theme == \"dark\"" "$1/.config/opencode/opencode.json" && jq -e ".mcpServers.other" "$1/.cursor/mcp.json" &&
     jq -e ".ui.theme == \"Dracula\"" "$1/.gemini/settings.json"' _ "$HOME"
 check "~/.gemini is 0700, since Gemini CLI rewrites its settings at 0644" \
-  test "$(stat -c %a "$HOME/.gemini")" = 700
+  test "$(mode_of "$HOME/.gemini")" = 700
 "$CE" uninstall >"$LOG/uninstall-exposed" 2>&1 || fail "ce uninstall exited $?"
 after=$(tree_of)
 check "ce uninstall puts every mode back, ~/.gemini's too" test "$before" = "$after"
@@ -457,10 +461,9 @@ chmod +x "$WORK/no-chmod/chmod"
 login
 PATH="$WORK/no-chmod:$PATH" "$CE" connect >"$LOG/connect-first-open" 2>&1 || fail "ce connect exited $?"
 for file in "${secret_files[@]}"; do
-  check "$file: created 0600 under umask 022" \
-    bash -c '[[ $(stat -c %a "$1") == 600 ]] && grep -qF "$2" "$1"' _ "$HOME/$file" "$KEY"
+  check "$file: created 0600 under umask 022" private_with_key "$HOME/$file"
 done
-check "~/.gemini: created 0700" test "$(stat -c %a "$HOME/.gemini")" = 700
+check "~/.gemini: created 0700" test "$(mode_of "$HOME/.gemini")" = 700
 "$CE" uninstall >/dev/null 2>&1
 
 # --- Gemini CLI saving its own settings after connect ------------------------

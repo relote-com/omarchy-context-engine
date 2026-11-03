@@ -60,7 +60,9 @@ ask() {
 # prints, keeping its inode and mode. If the command fails, the file is left
 # as it was. The staging file is private (mktemp makes it 0600), since the
 # content may hold the key; an interrupt leaves it behind rather than risk
-# deleting the only whole copy while the file is being written.
+# deleting the only whole copy while the file is being written. In place, so
+# a person's own file keeps its inode for whatever watches it; a file that
+# gets the key goes through secret_write instead.
 rewrite() {
   local file=$1 tmp status=0
   shift
@@ -76,12 +78,6 @@ without_line() {
   local status=0
   grep -vxF "$1" "$2" || status=$?
   ((status <= 1))
-}
-
-# end_line <file>: before appending, make sure the last line is ended.
-end_line() {
-  [[ -s $1 && $(tail -c1 "$1") != "" ]] && echo >>"$1"
-  return 0
 }
 
 # appended <file>: the file as it is, its last line ended, then stdin.
