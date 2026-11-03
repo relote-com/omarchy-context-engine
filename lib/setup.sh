@@ -233,15 +233,15 @@ remove_made() {
 
 # restore_modes: each file or folder ce tightened gets its recorded mode back.
 # One that is gone since is skipped, and the rest of uninstall goes on.
-# A 777 recorded for a symlink is never put back: v0.2.3 recorded the link's
-# own mode, always 777, not its target's, and chmod would make the target
-# world-writable. The real old mode is unknown, so the target keeps the 600
-# ce gave it.
+# A recorded 777 is never put back: v0.2.3 recorded a symlink's own mode,
+# always 777, not its target's, and the link may since have become a plain
+# file. chmod 777 would make an agent config anyone can edit. The real old
+# mode is unknown, so the file keeps the 600 ce gave it.
 restore_modes() {
   local path mode
   while read -r path mode; do
     [[ -e $path ]] || continue
-    [[ -L $path && $mode == 777 ]] && continue
+    [[ $mode == 777 ]] && continue
     chmod "$mode" "$path" || true
   done < <(sed -n 's/^mode \(.*\) \([0-7]*\)$/\1 \2/p' "$STATE_FILE")
 }

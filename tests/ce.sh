@@ -526,7 +526,7 @@ login
 "$CE" connect gemini >/dev/null 2>&1 || fail "ce connect gemini exited $?"
 rm -r "$HOME/.gemini"
 "$CE" uninstall >"$LOG/uninstall-gemini-gone" 2>&1 || fail "uninstall after ~/.gemini was deleted exited $?"
-check "and removes the key file and the record" \
+check "uninstall after ~/.gemini was deleted removes the key file and the record" \
   test ! -e "$HOME/.config/context-engine/config" -a ! -e "$HOME/.config/context-engine/installed"
 
 # --- a v0.2.3 install with a symlinked agent config --------------------------
@@ -545,6 +545,18 @@ check "the record is v0.2.3's: 777 for the link" \
 "$CE" uninstall >/dev/null 2>&1 || fail "ce uninstall exited $?"
 check "uninstall leaves a symlinked config's target at the 600 ce gave it, not 777" \
   test "$(mode_of "$HOME/dotfiles/cursor/mcp.json")" = 600
+
+# The same record, for a link the person has since replaced with a plain file.
+new_home v023-copy
+umask 022
+mkdir -p "$HOME/.cursor"
+jq . <<<'{"mcpServers":{"other":{"url":"https://other.example/mcp"}}}' >"$HOME/.cursor/mcp.json"
+login
+"$CE" connect cursor >/dev/null 2>&1 || fail "ce connect cursor exited $?"
+sed -i "s|^mode $HOME/.cursor/mcp.json [0-7]*\$|mode $HOME/.cursor/mcp.json 777|" "$HOME/.config/context-engine/installed"
+"$CE" uninstall >/dev/null 2>&1 || fail "ce uninstall exited $?"
+check "uninstall never puts v0.2.3's 777 on a link replaced by a plain file" \
+  test "$(mode_of "$HOME/.cursor/mcp.json")" = 600
 
 # --- a config jq cannot change -----------------------------------------------
 
