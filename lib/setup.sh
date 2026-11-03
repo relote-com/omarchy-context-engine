@@ -234,7 +234,7 @@ remove_made() {
 restore_modes() {
   local path mode
   while read -r path mode; do
-    [[ -f $path ]] && chmod "$mode" "$path"
+    [[ -e $path ]] && chmod "$mode" "$path"
   done < <(sed -n 's/^mode \(.*\) \([0-7]*\)$/\1 \2/p' "$STATE_FILE")
 }
 

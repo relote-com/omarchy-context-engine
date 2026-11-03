@@ -84,6 +84,15 @@ end_line() {
   return 0
 }
 
+# appended <file>: the file as it is, its last line ended, then stdin.
+appended() {
+  if [[ -s $1 ]]; then
+    cat "$1"
+    [[ $(tail -c1 "$1") == "" ]] || echo
+  fi
+  cat
+}
+
 # strip_block <file> <begin> <end>: drop the lines between two markers, markers included.
 strip_block() {
   [[ -f $1 ]] || return 0
@@ -132,11 +141,46 @@ new_file() {
   [[ -e $1 ]] || remember "made $1"
 }
 
-# Before ce tightens a file's permissions: what they were, once.
+# Before ce tightens a file's or a folder's permissions: what they were, once.
 keep_mode() {
   [[ -e $1 ]] || return 0
   awk -v p="mode $1 " 'index($0, p) == 1 { found = 1 } END { exit !found }' "$STATE_FILE" 2>/dev/null ||
-    remember "mode $1 $(stat -c %a "$1")"
+    remember "mode $1 $(stat -Lc %a "$1")"
+}
+
+# secret_write <file> <command…>: the file becomes what the command prints,
+# which holds the key. It goes into a new file beside it that mktemp makes
+# 0600 at its first open, renamed over the old one only once complete: the
+# key is never in a file another account can read, nor in one it opened while
+# the old file was readable. A symlinked config keeps its link; its target is
+# replaced. The old mode is noted for ce uninstall.
+secret_write() {
+  local file=$1 target tmp
+  shift
+  new_file "$file"
+  keep_mode "$file"
+  target=$(readlink -f "$file") || return 1
+  tmp=$(mktemp "$target.XXXXXX") || return 1
+  if "$@" >"$tmp"; then
+    mv -f "$tmp" "$target"
+  else
+    rm -f "$tmp"
+    return 1
+  fi
+}
+
+# private_dir <dir>: only you can enter it, from the moment it exists; one
+# that was already there is tightened, its mode noted for ce uninstall.
+private_dir() {
+  if [[ -d $1 ]]; then
+    keep_mode "$1"
+    chmod 700 "$1"
+  else
+    (
+      umask 077
+      mkdirs "$1"
+    )
+  fi
 }
 
 # The config is KEY=value lines, read rather than sourced so a stray line can
