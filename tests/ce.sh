@@ -516,6 +516,38 @@ touch "$HOME/.gemini/oauth_creds.json"
 check "a ~/.gemini ce made, that Gemini filled since, gets the umask's mode back" \
   test "$(mode_of "$HOME/.gemini")" = 755
 
+# --- ce uninstall after the person deleted a folder ce recorded --------------
+
+new_home gemini-gone
+umask 022
+mkdir -p "$HOME/.gemini"
+jq . <<<'{"ui":{}}' >"$HOME/.gemini/settings.json"
+login
+"$CE" connect gemini >/dev/null 2>&1 || fail "ce connect gemini exited $?"
+rm -r "$HOME/.gemini"
+"$CE" uninstall >"$LOG/uninstall-gemini-gone" 2>&1
+check "uninstall finishes after a recorded ~/.gemini was deleted" test $? -eq 0
+check "and removes the key file and the record" \
+  test ! -e "$HOME/.config/context-engine/config" -a ! -e "$HOME/.config/context-engine/installed"
+
+# --- a v0.2.3 install with a symlinked agent config --------------------------
+# v0.2.3 recorded a symlink's own mode, 777, not its target's.
+
+new_home v023-link
+umask 022
+mkdir -p "$HOME/dotfiles/cursor" "$HOME/.cursor"
+jq . <<<'{}' >"$HOME/dotfiles/cursor/mcp.json"
+ln -s "$HOME/dotfiles/cursor/mcp.json" "$HOME/.cursor/mcp.json"
+login
+"$CE" connect cursor >/dev/null 2>&1 || fail "ce connect cursor exited $?"
+sed -i "s|^mode $HOME/.cursor/mcp.json [0-7]*\$|mode $HOME/.cursor/mcp.json 777|" "$HOME/.config/context-engine/installed"
+check "the record is v0.2.3's: 777 for the link" \
+  grep -qxF "mode $HOME/.cursor/mcp.json 777" "$HOME/.config/context-engine/installed"
+target_mode=$(mode_of "$HOME/dotfiles/cursor/mcp.json")
+"$CE" uninstall >/dev/null 2>&1 || fail "ce uninstall exited $?"
+check "uninstall leaves a symlinked config's target at its mode, not 777" \
+  test "$(mode_of "$HOME/dotfiles/cursor/mcp.json")" = "$target_mode"
+
 # --- a config jq cannot change -----------------------------------------------
 
 new_home odd
